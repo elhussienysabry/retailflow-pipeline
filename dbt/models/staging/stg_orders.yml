@@ -1,0 +1,52 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: >
+      Clean staging model for orders. Each row is one order line item.
+      Casts order_date to DATE, trims/lowers status, and removes
+      orphaned and duplicate records.
+
+    columns:
+      - name: order_id
+        description: Unique identifier for each order (UUID).
+        tests:
+          - unique
+          - not_null
+
+      - name: customer_id
+        description: Foreign key to dim_customers. Identifies who placed the order.
+        tests:
+          - not_null
+
+      - name: product_id
+        description: Foreign key to dim_products. Identifies which product was ordered.
+        tests:
+          - not_null
+
+      - name: quantity
+        description: Number of units ordered.
+        tests:
+          - not_null
+
+      - name: discount_pct
+        description: Discount applied to this order (0–50).
+        tests:
+          - not_null
+
+      - name: order_date
+        description: Date the order was placed (DATE type).
+        tests:
+          - not_null
+
+      - name: status
+        description: Order status — completed, returned, or pending.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["completed", "returned", "pending"]
+
+      - name: shipping_days
+        description: Number of days for shipping.
+        tests:
+          - not_null

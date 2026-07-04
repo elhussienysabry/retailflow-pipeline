@@ -1,0 +1,83 @@
+{
+  "data_asset_type": "Dataset",
+  "expectation_suite_name": "orders_suite",
+  "meta": {
+    "description": "Data quality checks for the raw orders CSV. Ensures the data meets minimum quality standards before loading into PostgreSQL."
+  },
+  "expectations": [
+    {
+      "expectation_type": "expect_table_columns_to_match_set",
+      "kwargs": {
+        "column_set": [
+          "order_id", "customer_id", "product_id", "quantity",
+          "order_date", "status", "discount_pct", "shipping_days"
+        ],
+        "exact_match": true
+      },
+      "meta": {
+        "description": "The orders CSV must contain exactly these 8 columns."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "order_id"
+      },
+      "meta": {
+        "description": "Every order must have an order_id (not null)."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "customer_id"
+      },
+      "meta": {
+        "description": "Every order must reference a customer_id."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "status",
+        "value_set": ["completed", "returned", "pending"]
+      },
+      "meta": {
+        "description": "Order status must be one of: completed, returned, or pending."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "quantity",
+        "min_value": 1,
+        "max_value": 10
+      },
+      "meta": {
+        "description": "Order quantity must be between 1 and 10."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "discount_pct",
+        "min_value": 0,
+        "max_value": 50
+      },
+      "meta": {
+        "description": "Discount percentage must be between 0 and 50."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "shipping_days",
+        "min_value": 1,
+        "max_value": 14
+      },
+      "meta": {
+        "description": "Shipping days must be between 1 and 14."
+      }
+    }
+  ]
+}

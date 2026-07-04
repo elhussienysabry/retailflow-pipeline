@@ -1,0 +1,64 @@
+# =============================================================================
+# RetailFlow Pipeline — Docker Compose
+# =============================================================================
+# Runs PostgreSQL (the data warehouse) + pgAdmin (optional GUI) locally.
+# All services share the same Docker network for communication.
+#
+# Usage:
+#   docker compose up -d              # Start all services
+#   docker compose down               # Stop all services
+#   docker compose logs -f postgres   # Follow PostgreSQL logs
+# =============================================================================
+
+version: "3.8"
+
+services:
+  # ---------------------------------------------------------------
+  # PostgreSQL 15 — our data warehouse
+  # ---------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: retailflow-postgres
+    restart: unless-stopped
+    ports:
+      # WHY: Map host port 5432 to container port 5432 so local tools
+      # (like psql, dbt, Airflow) can reach the database.
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-retailflow}
+      POSTGRES_USER: ${POSTGRES_USER:-retailflow_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retailflow_pass}
+    volumes:
+      # WHY: Named volume persists data across container restarts.
+      - postgres_data:/var/lib/postgresql/data
+      # WHY: Auto-run schema scripts on first startup.
+      - ./sql/schema:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-retailflow_user} -d ${POSTGRES_DB:-retailflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------
+  # pgAdmin — web-based PostgreSQL admin (optional, for debugging)
+  # ---------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: retailflow-pgadmin
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    name: retailflow_postgres_data
+  pgadmin_data:
+    name: retailflow_pgadmin_data

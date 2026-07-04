@@ -1,0 +1,56 @@
+version: 2
+
+models:
+  - name: fct_orders
+    description: >
+      Fact table for orders. One row per order line item with measures in
+      dollars (converted from cents). Foreign keys connect to dim_customers
+      and dim_products for analysis.
+
+    columns:
+      - name: order_id
+        description: Unique order identifier. Primary key.
+        tests:
+          - unique
+          - not_null
+
+      - name: customer_id
+        description: Foreign key to dim_customers.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_id
+
+      - name: product_id
+        description: Foreign key to dim_products.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_products')
+              field: product_id
+
+      - name: order_date
+        description: Date the order was placed.
+
+      - name: quantity
+        description: Number of units ordered.
+
+      - name: discount_pct
+        description: Discount percentage applied.
+
+      - name: status
+        description: Order status (completed, returned, pending).
+
+      - name: shipping_days
+        description: Shipping duration in days.
+
+      - name: gross_revenue_dollars
+        description: Revenue before discount in dollars.
+        tests:
+          - not_null
+
+      - name: net_revenue_dollars
+        description: Revenue after discount in dollars.
+        tests:
+          - not_null

@@ -1,0 +1,39 @@
+# =============================================================================
+# RetailFlow Pipeline — Python Dependencies
+# =============================================================================
+# Install with: pip install -r requirements.txt
+# =============================================================================
+
+# Core data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Database connectivity
+SQLAlchemy==2.0.30
+psycopg2-binary>=2.9
+
+# Data generation
+Faker==22.6.0
+
+# Orchestration
+apache-airflow>=2.7.0
+
+# Data transformation
+dbt-core>=1.7.0
+dbt-postgres>=1.7.0
+
+# Data quality
+great_expectations==0.18.19
+
+# Testing
+pytest==7.4.4
+pytest-cov==5.0.0
+
+# Code quality
+black==24.4.2
+flake8==7.0.0
+pre-commit==3.7.1
+
+# Utilities
+python-dotenv==1.0.1
+tqdm==4.66.4

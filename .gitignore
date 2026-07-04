@@ -1,0 +1,65 @@
+# =============================================================================
+# RetailFlow Pipeline — .gitignore
+# =============================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+.venv.bak/
+
+# --- IDE / Editor ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Environment ---
+.env
+*.env.local
+
+# --- Data ---
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# --- Airflow ---
+airflow/logs/
+airflow/airflow.cfg
+airflow/airflow.db
+airflow/webserver_config.py
+
+# --- dbt ---
+dbt/logs/
+dbt/target/
+dbt/dbt_packages/
+
+# --- Great Expectations ---
+great_expectations/uncommitted/
+great_expectations/.ge_store_backend/
+
+# --- Docker ---
+docker-compose.override.yml
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Test artifacts ---
+.coverage
+.coverage.*

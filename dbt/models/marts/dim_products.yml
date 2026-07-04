@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: dim_products
+    description: >
+      Product dimension table. One row per product with catalog attributes
+      and pre-computed aggregate metrics (total orders, units sold, revenue).
+
+    columns:
+      - name: product_id
+        description: Unique product identifier (UUID). Primary key.
+        tests:
+          - unique
+          - not_null
+
+      - name: product_name
+        description: Product display name.
+        tests:
+          - not_null
+
+      - name: category
+        description: Product category (Electronics, Clothing, Food, Home).
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["Electronics", "Clothing", "Food", "Home"]
+
+      - name: price_cents
+        description: Unit price in cents.
+        tests:
+          - not_null
+
+      - name: stock_quantity
+        description: Current stock level.
+
+      - name: supplier_country
+        description: Supplier country.
+
+      - name: total_orders
+        description: Total number of orders containing this product.
+
+      - name: total_units_sold
+        description: Total quantity of this product sold.
+
+      - name: total_revenue_cents
+        description: Total revenue from this product in cents.

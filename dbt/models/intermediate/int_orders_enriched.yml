@@ -1,0 +1,82 @@
+version: 2
+
+models:
+  - name: int_orders_enriched
+    description: >
+      Intermediate model that joins orders, customers, and products into a
+      single denormalized view. Computes gross and net revenue per order line.
+      All mart models source from this view.
+
+    columns:
+      - name: order_id
+        description: Unique order identifier.
+        tests:
+          - unique
+          - not_null
+
+      - name: order_date
+        description: Date the order was placed.
+
+      - name: quantity
+        description: Number of units ordered.
+
+      - name: discount_pct
+        description: Discount percentage applied (0–50).
+
+      - name: status
+        description: Order status.
+
+      - name: shipping_days
+        description: Shipping duration in days.
+
+      - name: customer_id
+        description: Customer identifier.
+
+      - name: customer_full_name
+        description: Concatenated first and last name.
+
+      - name: customer_email
+        description: Customer email address.
+
+      - name: customer_country
+        description: Customer's country.
+
+      - name: customer_city
+        description: Customer's city.
+
+      - name: customer_age
+        description: Customer's age.
+
+      - name: customer_gender
+        description: Customer's gender.
+
+      - name: customer_signup_date
+        description: Customer signup date.
+
+      - name: product_id
+        description: Product identifier.
+
+      - name: product_name
+        description: Product name.
+
+      - name: product_category
+        description: Product category.
+
+      - name: price_cents
+        description: Unit price in cents.
+
+      - name: stock_quantity
+        description: Current stock level.
+
+      - name: product_supplier_country
+        description: Supplier country.
+
+      - name: gross_revenue_cents
+        description: Revenue before discount (quantity * price_cents).
+        tests:
+          - not_null
+
+      - name: net_revenue_cents
+        description: Revenue after discount.
+        tests:
+          - not_null

@@ -1,0 +1,45 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: >
+      Clean staging model for customer data. Strips whitespace, lowercases
+      email, casts signup_date to DATE, and removes duplicates.
+
+    columns:
+      - name: customer_id
+        description: Unique identifier for each customer (UUID).
+        tests:
+          - unique
+          - not_null
+
+      - name: first_name
+        description: Customer's first name.
+        tests:
+          - not_null
+
+      - name: last_name
+        description: Customer's last name.
+        tests:
+          - not_null
+
+      - name: email
+        description: Customer's email address (lowercased).
+        tests:
+          - unique
+          - not_null
+
+      - name: country
+        description: Country where the customer lives.
+
+      - name: city
+        description: City where the customer lives.
+
+      - name: signup_date
+        description: Date the customer signed up (DATE type).
+
+      - name: age
+        description: Customer's age in years.
+
+      - name: gender
+        description: Customer's gender (Male, Female, Non-binary).

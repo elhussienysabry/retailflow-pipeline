@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: stg_products
+    description: >
+      Clean staging model for product data. Strips whitespace, filters out
+      invalid prices (<= 0), and removes duplicate records.
+
+    columns:
+      - name: product_id
+        description: Unique identifier for each product (UUID).
+        tests:
+          - unique
+          - not_null
+
+      - name: product_name
+        description: Product display name.
+        tests:
+          - not_null
+
+      - name: category
+        description: Product category (Electronics, Clothing, Food, Home).
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["Electronics", "Clothing", "Food", "Home"]
+
+      - name: price_cents
+        description: Price of the product in cents (integer).
+        tests:
+          - not_null
+
+      - name: stock_quantity
+        description: Current stock level (number of units available).
+
+      - name: supplier_country
+        description: Country where the product supplier is based.

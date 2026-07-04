@@ -1,0 +1,24 @@
+# =============================================================================
+# RetailFlow Pipeline — dbt Profiles Configuration (example)
+# =============================================================================
+# Copy this file to profiles.yml and update the values.
+# dbt uses this file to connect to your data warehouse.
+#
+# IMPORTANT: The profile name must match the `profile:` setting in
+# dbt_project.yml (default: "retailflow").
+# =============================================================================
+
+retailflow:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      threads: 4
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
+      user: "{{ env_var('POSTGRES_USER', 'retailflow_user') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'retailflow_pass') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'retailflow') }}"
+      schema: public
+      keepalives_idle: 0
+      connect_timeout: 10
