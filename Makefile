@@ -5,7 +5,7 @@
 # Type `make help` to see all available commands.
 # =============================================================================
 
-.PHONY: help setup run stop clean test lint format
+.PHONY: help setup run stop clean test lint format status
 
 help:  # Print available commands with descriptions
 	@echo "RetailFlow Pipeline — Available Commands"
@@ -19,7 +19,8 @@ help:  # Print available commands with descriptions
 	@echo "  make dbt-run        Execute all dbt models (staging → intermediate → marts)"
 	@echo "  make dbt-test       Run dbt data tests on all models"
 	@echo "  make sql-analyze    Run all 4 analytics queries against the warehouse"
-	@echo "  make test           Run pytest unit tests"
+  @echo "  make test           Run pytest unit tests"
+  @echo "  make status         Run end-to-end pipeline health check"
 	@echo "  make lint           Run flake8 linting on all Python files"
 	@echo "  make format         Auto-format Python code with black"
 	@echo "  make clean          Remove generated data, Python cache, and Docker volumes"
@@ -85,6 +86,10 @@ sql-analyze:  # Execute all 4 analytics queries and show results
 	@echo "Run manually: psql -d retailflow -f sql/analytics/product_category_performance.sql"
 	@echo "=== Customer Cohort Analysis ==="
 	@echo "Run manually: psql -d retailflow -f sql/analytics/customer_cohort_analysis.sql"
+
+status:  # Run the end-to-end pipeline health check
+	@echo ">> Running pipeline health check..."
+	@.venv\Scripts\python scripts\project_status.py
 
 test:  # Run pytest unit tests
 	@echo ">> Running unit tests..."

@@ -192,7 +192,7 @@ Then run any analytics query from `sql/analytics/`, for example:
 |---------------|-----------|---------------|
 | `data/raw/` | Raw CSV files (orders, customers, products) | Simulates data ingestion from source systems |
 | `data/processed/` | Cleaned output files | Reserved for future processed exports |
-| `scripts/` | Python data scripts | Core pipeline logic (generate + load) |
+| `scripts/` | Python data scripts | Core pipeline logic (generate, load, and status check) |
 | `airflow/dags/` | Airflow DAG definition | Orchestrates the 8-step pipeline |
 | `airflow/plugins/` | Custom Airflow hooks | Reusable database connection code |
 | `dbt/models/staging/` | dbt staging models | Raw → clean (rename, cast, deduplicate) |
@@ -446,10 +446,55 @@ pytest tests/ --cov=scripts/ --cov-report=term-missing
 | `test_generate_data.py` | Fake data generator | Correct row counts, expected columns, valid data ranges |
 | `test_transformations.py` | Business logic | Cents-to-dollars conversion, discount calculation, status normalization |
 | `test_load_to_postgres.py` | DB loader | Engine creation, schema creation, truncation logic |
+| `test_project_status.py` | Status checker | Docker, PostgreSQL, env, CSV checks, overall status logic |
 
 ---
 
-## 12. Common Errors & Fixes
+## 12. How to Run the Status Check
+
+The `project_status.py` script performs a quick end-to-end health check of your pipeline. It verifies Docker, PostgreSQL, the `.env` file, raw CSV files, and database row counts — and prints beginner-friendly fix hints if something is wrong.
+
+```bash
+# Run the status check
+python scripts/project_status.py
+```
+
+**Exit codes:**
+- `0` — Everything is healthy
+- `1` — Warnings (pipeline is degraded but usable)
+- `2` — Failures (pipeline is not operational)
+
+Example output when everything is working:
+
+```text
+RetailFlow Pipeline Status Report
+---------------------------------
+Docker: OK - Docker Desktop is running
+PostgreSQL: OK - PostgreSQL container is running and reachable
+.env File: OK - .env file exists and loaded successfully
+Raw CSV Files: OK - All required CSV files present in data/raw/
+Database Row Counts: OK - All raw tables have data
+Overall Status: Healthy
+```
+
+Example output when something is broken:
+
+```text
+RetailFlow Pipeline Status Report
+---------------------------------
+Docker: OK - Docker Desktop is running
+PostgreSQL: WARNING - Container is running but database is not reachable
+.env File: OK - .env file exists and loaded successfully
+Raw CSV Files: FAIL - Missing csv files in data/raw/
+Database Row Counts: WARNING - Skipped — PostgreSQL not reachable
+Overall Status: Unhealthy
+
+Fix Hints:
+  - Start the container: 'docker compose up -d' from the project root.
+  - Run: .venv\Scripts\python scripts\generate_fake_data.py
+```
+
+## 13. Common Errors & Fixes
 
 | Error Message | Cause | Fix |
 |---------------|-------|-----|
@@ -469,7 +514,7 @@ pytest tests/ --cov=scripts/ --cov-report=term-missing
 
 ---
 
-## 13. What You Learned
+## 14. What You Learned
 
 Congratulations! By completing this project, you have practiced these real-world data engineering skills:
 
@@ -491,7 +536,7 @@ Congratulations! By completing this project, you have practiced these real-world
 
 ---
 
-## 14. Next Steps
+## 15. Next Steps
 
 This project is a foundation. Here's how to extend it for more advanced learning:
 
@@ -540,7 +585,7 @@ This creates a web UI showing how data flows through your models — who depends
 
 ---
 
-## 15. Glossary
+## 16. Glossary
 
 | Term | Simple Definition |
 |------|-------------------|
