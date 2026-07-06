@@ -4,6 +4,8 @@
 
 [![CI/CD Build Status](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml/badge.svg)](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml)
 
+> **:material-book: Architecture documentation:** See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full data lineage blueprint, system design, and step-by-step runbook.
+
 ---
 
 ## 1. Project Overview

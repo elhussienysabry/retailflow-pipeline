@@ -14,10 +14,11 @@ build/
 
 # --- Virtual environments ---
 .venv/
+.venv-dbt/
+.venv.bak/
 venv/
 env/
 ENV/
-.venv.bak/
 
 # --- IDE / Editor ---
 .idea/
@@ -48,6 +49,7 @@ airflow/webserver_config.py
 dbt/logs/
 dbt/target/
 dbt/dbt_packages/
+dbt/.user.yml
 
 # --- Great Expectations ---
 great_expectations/uncommitted/
@@ -56,10 +58,21 @@ great_expectations/.ge_store_backend/
 # --- Docker ---
 docker-compose.override.yml
 
+# --- Outputs ---
+outputs/*
+!outputs/.gitkeep
+
 # --- Logs ---
 *.log
 logs/
 
 # --- Test artifacts ---
+.pytest_cache/
 .coverage
 .coverage.*
+coverage/
+htmlcov/
+
+# --- Temp scripts ---
+tmp_*.py
+*.tmp
