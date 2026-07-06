@@ -2,6 +2,8 @@
 
 **An end-to-end data pipeline for a fictional e-commerce retail company — built by and for junior data engineers.**
 
+[![CI/CD Build Status](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml/badge.svg)](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml)
+
 ---
 
 ## 1. Project Overview
@@ -622,7 +624,49 @@ The dashboard uses Streamlit's built-in caching (`@st.cache_data`) so it only qu
 
 ---
 
-## 14. Common Errors & Fixes
+## 14. CI/CD Pipeline (GitHub Actions)
+
+This project includes a fully automated CI/CD workflow via GitHub Actions.
+
+### Workflow Overview
+
+The workflow is defined in `.github/workflows/ci_cd.yml` and runs on every `push` or `pull_request` to `main` / `master`.
+
+### Jobs
+
+| Job | Environment | What It Does |
+|-----|-------------|-------------|
+| **Core Python – Lint & Test** | `ubuntu-latest`, Python 3.12 | Installs all main deps from `requirements.txt`, runs `flake8` linting, checks formatting with `black`, and executes the full `pytest` suite (77+ tests) |
+| **dbt – Parse & Validate** | `ubuntu-latest`, Python 3.12 | Installs only `dbt-core==1.7.14` + `dbt-postgres==1.7.14` (mirroring the isolated `.venv-dbt`), runs `dbt debug` for connection validation and `dbt parse` for SQL compilation checks |
+
+### PostgreSQL Service Container
+
+Both jobs spin up a temporary **PostgreSQL 15** service container so that:
+- Integration tests can connect to a live database
+- `dbt debug` can verify the connection configuration
+- `dbt parse` can resolve `{{ source() }}` and `{{ ref() }}` macros against real schemas
+
+The service container uses the same credentials as the local `.env` file:
+```
+host: localhost : 5432
+db:   retailflow
+user: retailflow_user
+pass: retailflow_pass
+```
+
+### Build Badge
+
+To show the pipeline status in your own fork, replace the owner/repo in the badge URL below:
+
+```markdown
+[![CI/CD Build Status](https://github.com/YOUR_USERNAME/retailflow-pipeline/actions/workflows/ci_cd.yml/badge.svg)](https://github.com/YOUR_USERNAME/retailflow-pipeline/actions/workflows/ci_cd.yml)
+```
+
+The badge is already included at the top of this README for the original repository.
+
+---
+
+## 15. Common Errors & Fixes
 
 | Error Message | Cause | Fix |
 |---------------|-------|-----|
@@ -642,7 +686,7 @@ The dashboard uses Streamlit's built-in caching (`@st.cache_data`) so it only qu
 
 ---
 
-## 15. What You Learned
+## 16. What You Learned
 
 Congratulations! By completing this project, you have practiced these real-world data engineering skills:
 
@@ -667,7 +711,7 @@ Congratulations! By completing this project, you have practiced these real-world
 
 ---
 
-## 16. Next Steps
+## 17. Next Steps
 
 This project is a foundation. Here's how to extend it for more advanced learning:
 
@@ -713,7 +757,7 @@ This creates a web UI showing how data flows through your models — who depends
 
 ---
 
-## 17. Glossary
+## 18. Glossary
 
 | Term | Simple Definition |
 |------|-------------------|
