@@ -4,12 +4,13 @@ RetailFlow Pipeline — Fake Data Generator
 
 Generates realistic fake retail data for the RetailFlow Pipeline:
 
-    - customers.csv  (10,000 rows) — customer demographics
-    - products.csv   (500 rows)    — product catalog
-    - orders.csv     (100,000 rows) — transaction history
+    - customers.csv — customer demographics
+    - products.csv  — product catalog
+    - orders.csv    — transaction history
 
 Usage:
     python scripts/generate_fake_data.py
+    python scripts/generate_fake_data.py --profile small
     python scripts/generate_fake_data.py --customers 5000 --products 200 --orders 50000
 
 The output files are written to data/raw/.
@@ -22,17 +23,22 @@ import os
 import random
 import uuid
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from faker import Faker
 
 # WHY: Use a module-level logger so log messages show the script name.
 logger = logging.getLogger(__name__)
 
-# Constants for data generation
-DEFAULT_NUM_CUSTOMERS = 10_000
-DEFAULT_NUM_PRODUCTS = 500
-DEFAULT_NUM_ORDERS = 100_000
+# Scale profiles for quick dataset sizing
+SCALE_PROFILES: Dict[str, Dict[str, int]] = {
+    "small": {"customers": 1_000, "products": 100, "orders": 10_000},
+    "medium": {"customers": 10_000, "products": 500, "orders": 100_000},
+    "large": {"customers": 100_000, "products": 5_000, "orders": 1_000_000},
+}
+
+DEFAULT_PROFILE = "medium"
+
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
 
 # WHY: Seed the Faker generator for reproducible results across runs.
@@ -61,29 +67,55 @@ SUPPLIER_COUNTRIES: List[str] = [
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments to override default row counts."""
+    """Parse command-line arguments, supporting scale profiles and explicit counts.
+
+    If --profile is given without explicit --customers/--products/--orders,
+    the profile's values are used. Explicit flags override the profile.
+
+    Returns:
+        Namespace with customers, products, orders attributes.
+    """
     parser = argparse.ArgumentParser(
         description="Generate fake retail data for the RetailFlow Pipeline."
     )
     parser.add_argument(
+        "--profile",
+        type=str,
+        choices=list(SCALE_PROFILES.keys()),
+        default=DEFAULT_PROFILE,
+        help=f"Scale profile: {', '.join(SCALE_PROFILES.keys())} "
+             f"(default: {DEFAULT_PROFILE}). Overridden by explicit --customers, "
+             f"--products, or --orders flags.",
+    )
+    parser.add_argument(
         "--customers",
         type=int,
-        default=DEFAULT_NUM_CUSTOMERS,
-        help=f"Number of customer records (default: {DEFAULT_NUM_CUSTOMERS})",
+        default=None,
+        help="Number of customer records (overrides profile)",
     )
     parser.add_argument(
         "--products",
         type=int,
-        default=DEFAULT_NUM_PRODUCTS,
-        help=f"Number of product records (default: {DEFAULT_NUM_PRODUCTS})",
+        default=None,
+        help="Number of product records (overrides profile)",
     )
     parser.add_argument(
         "--orders",
         type=int,
-        default=DEFAULT_NUM_ORDERS,
-        help=f"Number of order records (default: {DEFAULT_NUM_ORDERS})",
+        default=None,
+        help="Number of order records (overrides profile)",
     )
-    return parser.parse_args()
+    parsed = parser.parse_args()
+
+    profile = SCALE_PROFILES[parsed.profile]
+    if parsed.customers is None:
+        parsed.customers = profile["customers"]
+    if parsed.products is None:
+        parsed.products = profile["products"]
+    if parsed.orders is None:
+        parsed.orders = profile["orders"]
+
+    return parsed
 
 
 def ensure_output_dir() -> str:
@@ -241,7 +273,8 @@ def main() -> None:
     )
 
     logger.info(
-        "Starting data generation: %d customers, %d products, %d orders",
+        "Starting data generation (profile=%s): %d customers, %d products, %d orders",
+        args.profile,
         args.customers,
         args.products,
         args.orders,

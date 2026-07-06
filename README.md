@@ -193,6 +193,9 @@ Then run any analytics query from `sql/analytics/`, for example:
 | `data/raw/` | Raw CSV files (orders, customers, products) | Simulates data ingestion from source systems |
 | `data/processed/` | Cleaned output files | Reserved for future processed exports |
 | `scripts/` | Python data scripts | Core pipeline logic (generate, load, and status check) |
+| `src/exports/` | Analytics Excel export | Runs 4 warehouse queries and produces a styled `.xlsx` workbook |
+| `src/dashboard/` | Streamlit dashboard | Interactive KPI dashboard with charts and data tables |
+| `outputs/` | Export output directory | Timestamped Excel analytics exports land here |
 | `airflow/dags/` | Airflow DAG definition | Orchestrates the 8-step pipeline |
 | `airflow/plugins/` | Custom Airflow hooks | Reusable database connection code |
 | `dbt/models/staging/` | dbt staging models | Raw → clean (rename, cast, deduplicate) |
@@ -447,6 +450,8 @@ pytest tests/ --cov=scripts/ --cov-report=term-missing
 | `test_transformations.py` | Business logic | Cents-to-dollars conversion, discount calculation, status normalization |
 | `test_load_to_postgres.py` | DB loader | Engine creation, schema creation, truncation logic |
 | `test_project_status.py` | Status checker | Docker, PostgreSQL, env, CSV checks, overall status logic |
+| `test_excel_export.py` | Excel exporter | Workbook creation, sheet names, headers, styling, currency format |
+| `test_generate_data_profiles.py` | Scale profiles | Profile defaults, explicit overrides, CLI argument parsing |
 
 ---
 
@@ -494,7 +499,90 @@ Fix Hints:
   - Run: .venv\Scripts\python scripts\generate_fake_data.py
 ```
 
-## 13. Common Errors & Fixes
+## 13. How to Use the New Features
+
+### 13.1 Data Generation with Scale Profiles
+
+The data generator now supports predefined scale profiles so you can quickly generate different dataset sizes:
+
+```bash
+# Small dataset (fast, good for testing)
+python scripts/generate_fake_data.py --profile small
+
+# Medium dataset (default)
+python scripts/generate_fake_data.py --profile medium
+
+# Large dataset (100k customers, 5k products, 1M orders)
+python scripts/generate_fake_data.py --profile large
+```
+
+**Override individual counts:**
+
+Any explicit `--customers`, `--products`, or `--orders` flag overrides the profile for that specific count:
+
+```bash
+# Start from 'small' but generate 50,000 orders
+python scripts/generate_fake_data.py --profile small --orders 50000
+```
+
+**Profile reference:**
+
+| Profile  | Customers | Products | Orders    |
+|----------|-----------|----------|-----------|
+| small    | 1,000     | 100      | 10,000    |
+| medium   | 10,000    | 500      | 100,000   |
+| large    | 100,000   | 5,000    | 1,000,000 |
+
+### 13.2 Analytics Excel Export
+
+After running `dbt-run`, export analytics to a professionally styled Excel workbook:
+
+```bash
+# Via Make
+make export
+
+# Or directly
+python -m src.exports.excel_exporter
+```
+
+The workbook is saved to `outputs/retail_analytics_YYYYMMDD_HHMMSS.xlsx` and contains 4 sheets:
+
+| Sheet               | Contents                                    |
+|---------------------|---------------------------------------------|
+| Top Customers       | Top 10 customers by total net revenue       |
+| Monthly Sales       | Month-over-month revenue and order counts   |
+| Category Performance| Revenue and units sold per product category  |
+| Cohort Analysis     | Customer retention by first-purchase month   |
+
+The Excel file uses professional formatting: bold headers with a dark blue fill, auto-fitted column widths, and currency formatting on revenue columns.
+
+### 13.3 Streamlit Analytics Dashboard
+
+Launch an interactive dashboard to explore pipeline analytics in real time:
+
+```bash
+# Via Make
+make dashboard
+
+# Or directly
+streamlit run src/dashboard/app.py
+```
+
+The dashboard opens in your browser at `http://localhost:8501` and includes:
+
+- **3 KPI cards** — Total Orders, Total Net Revenue, Active Customers
+- **Line chart** — Monthly sales trend over time
+- **Bar chart** — Category performance comparison
+- **Data table** — Top 10 customers with revenue details
+- **Refresh button** — Force-fetches fresh data from PostgreSQL
+
+The dashboard uses Streamlit's built-in caching (`@st.cache_data`) so it only queries the database when data expires (5 minutes) or when you click Refresh.
+
+> **Note:** All three features require PostgreSQL to be running with dbt models materialized. Run `make run && make generate-data && make load-data && make dbt-run` first.
+
+---
+
+## 14. Common Errors & Fixes
 
 | Error Message | Cause | Fix |
 |---------------|-------|-----|
@@ -514,7 +602,7 @@ Fix Hints:
 
 ---
 
-## 14. What You Learned
+## 15. What You Learned
 
 Congratulations! By completing this project, you have practiced these real-world data engineering skills:
 
@@ -525,6 +613,9 @@ Congratulations! By completing this project, you have practiced these real-world
 - **Containerizing services with Docker** — PostgreSQL and pgAdmin for local development
 - **Using Great Expectations** for automated data quality validation
 - **Writing clean, production-ready Python** — type hints, logging, docstrings, error handling
+- **Exporting analytics to Excel** — styled workbooks with openpyxl, auto-fitted columns, currency formatting
+- **Building Streamlit dashboards** — KPI cards, charts, caching, and interactive refresh for real-time analytics
+- **Designing CLI scale profiles** — predefined dataset sizes with backward-compatible override flags
 - **Structuring SQL with CTEs** — no nested subqueries, readable and maintainable
 - **Performing cohort analysis** — a classic analytics technique used at every tech company
 - **Testing data code with pytest** — mock database connections, verify transformations
@@ -536,7 +627,7 @@ Congratulations! By completing this project, you have practiced these real-world
 
 ---
 
-## 15. Next Steps
+## 16. Next Steps
 
 This project is a foundation. Here's how to extend it for more advanced learning:
 
@@ -558,12 +649,9 @@ Instead of reading CSVs from disk, upload them to **Amazon S3** and use **boto3*
 
 Set up **Apache Kafka** + **Kafka Connect** to stream orders in real time instead of batch processing. This teaches stream processing concepts (event time, watermarks, exactly-once semantics).
 
-### Add a BI Dashboard
+### Deploy the Dashboard to the Cloud
 
-Connect **Metabase** or **Apache Superset** (both free, both run in Docker) to PostgreSQL and build dashboards:
-- Revenue over time (line chart)
-- Top products (bar chart)
-- Customer map (geo chart)
+Deploy the Streamlit dashboard to **Streamlit Community Cloud**, **Hugging Face Spaces**, or **Railway** so stakeholders can access it without running Python. Streamlit Cloud is free for public apps.
 
 ### Add Incremental Loading
 
@@ -585,7 +673,7 @@ This creates a web UI showing how data flows through your models — who depends
 
 ---
 
-## 16. Glossary
+## 17. Glossary
 
 | Term | Simple Definition |
 |------|-------------------|
