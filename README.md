@@ -595,7 +595,7 @@ make dashboard
 
 The dashboard opens in your browser at `http://localhost:8501`:
 
-![RetailFlow Pipeline Dashboard](Images/dashboard.png)
+![RetailFlow Pipeline Dashboard]([Images/dashboard.png](https://github.com/elhussienysabry/retailflow-pipeline/blob/main/images/dashboard.png))
 
 **Dashboard features:**
 
