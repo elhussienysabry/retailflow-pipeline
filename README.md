@@ -135,10 +135,25 @@ make setup
 
 1. Copies `.env.example` to `.env` if not present
 2. Creates a Python virtual environment (`.venv/`)
-3. Installs all Python dependencies (pandas, dbt, SQLAlchemy, etc.)
+3. Installs all Python dependencies (pandas, SQLAlchemy, etc.) into `.venv`
 4. Pulls the PostgreSQL and pgAdmin Docker images
 
 This typically takes 2-5 minutes depending on your internet speed.
+
+### Step 3b: Set up the isolated dbt environment (recommended)
+
+To avoid known library conflicts between `dbt-core` and other packages (e.g., `mashumaro`), the project uses **two isolated virtual environments**:
+
+- `.venv` — Main environment for data generation, loading, export, and the dashboard.
+- `.venv-dbt` — Separate environment exclusively for `dbt-core` and `dbt-postgres`.
+
+Set up the dbt environment once:
+
+```bash
+make setup-dbt
+```
+
+This creates `.venv-dbt/` and installs `dbt-core==1.7.14` / `dbt-postgres==1.7.14` inside it.
 
 ### Step 4: Start services
 
@@ -158,9 +173,17 @@ make run
 ```bash
 make generate-data   # Creates fake CSVs in data/raw/
 make load-data      # Loads CSVs into PostgreSQL raw schema
-make dbt-run        # Runs dbt: staging → intermediate → marts
-make dbt-test       # Runs data quality tests
+make dbt-run        # Runs dbt (uses .venv-dbt) → staging → intermediate → marts
+make dbt-test       # Runs dbt data quality tests (uses .venv-dbt)
 ```
+
+> **Note:** The `dbt-run` and `dbt-test` commands use the isolated `.venv-dbt` environment
+> to avoid conflicts with other Python packages. If you prefer to run dbt manually:
+> ```bash
+> cd dbt
+> ..\.venv-dbt\Scripts\dbt run
+> ..\.venv-dbt\Scripts\dbt test
+> ```
 
 ### Step 6: Run analytics queries
 
@@ -196,6 +219,8 @@ Then run any analytics query from `sql/analytics/`, for example:
 | `src/exports/` | Analytics Excel export | Runs 4 warehouse queries and produces a styled `.xlsx` workbook |
 | `src/dashboard/` | Streamlit dashboard | Interactive KPI dashboard with charts and data tables |
 | `outputs/` | Export output directory | Timestamped Excel analytics exports land here |
+| `.venv/` | Main Python virtual environment | Data gen, loading, export, dashboard, tests |
+| `.venv-dbt/` | Isolated dbt virtual environment | `dbt-core` + `dbt-postgres` only (avoids `mashumaro` conflicts) |
 | `airflow/dags/` | Airflow DAG definition | Orchestrates the 8-step pipeline |
 | `airflow/plugins/` | Custom Airflow hooks | Reusable database connection code |
 | `dbt/models/staging/` | dbt staging models | Raw → clean (rename, cast, deduplicate) |
@@ -503,17 +528,17 @@ Fix Hints:
 
 ### 13.1 Data Generation with Scale Profiles
 
-The data generator now supports predefined scale profiles so you can quickly generate different dataset sizes:
+The data generator supports predefined scale profiles for quick dataset sizing (uses `.venv`):
 
 ```bash
 # Small dataset (fast, good for testing)
-python scripts/generate_fake_data.py --profile small
+.venv\Scripts\python scripts\generate_fake_data.py --profile small
 
 # Medium dataset (default)
-python scripts/generate_fake_data.py --profile medium
+.venv\Scripts\python scripts\generate_fake_data.py --profile medium
 
 # Large dataset (100k customers, 5k products, 1M orders)
-python scripts/generate_fake_data.py --profile large
+.venv\Scripts\python scripts\generate_fake_data.py --profile large
 ```
 
 **Override individual counts:**
@@ -522,7 +547,7 @@ Any explicit `--customers`, `--products`, or `--orders` flag overrides the profi
 
 ```bash
 # Start from 'small' but generate 50,000 orders
-python scripts/generate_fake_data.py --profile small --orders 50000
+.venv\Scripts\python scripts\generate_fake_data.py --profile small --orders 50000
 ```
 
 **Profile reference:**
@@ -535,14 +560,14 @@ python scripts/generate_fake_data.py --profile small --orders 50000
 
 ### 13.2 Analytics Excel Export
 
-After running `dbt-run`, export analytics to a professionally styled Excel workbook:
+After running dbt (`make dbt-run`), export analytics to a professionally styled Excel workbook. This script runs in `.venv`:
 
 ```bash
 # Via Make
 make export
 
 # Or directly
-python -m src.exports.excel_exporter
+.venv\Scripts\python -m src.exports.excel_exporter
 ```
 
 The workbook is saved to `outputs/retail_analytics_YYYYMMDD_HHMMSS.xlsx` and contains 4 sheets:
@@ -558,27 +583,42 @@ The Excel file uses professional formatting: bold headers with a dark blue fill,
 
 ### 13.3 Streamlit Analytics Dashboard
 
-Launch an interactive dashboard to explore pipeline analytics in real time:
+Launch an interactive dashboard to explore pipeline analytics in real time (uses `.venv`):
 
 ```bash
 # Via Make
 make dashboard
 
 # Or directly
-streamlit run src/dashboard/app.py
+.venv\Scripts\streamlit run src\dashboard\app.py
 ```
 
-The dashboard opens in your browser at `http://localhost:8501` and includes:
+The dashboard opens in your browser at `http://localhost:8501`:
 
-- **3 KPI cards** — Total Orders, Total Net Revenue, Active Customers
-- **Line chart** — Monthly sales trend over time
-- **Bar chart** — Category performance comparison
-- **Data table** — Top 10 customers with revenue details
-- **Refresh button** — Force-fetches fresh data from PostgreSQL
+![RetailFlow Pipeline Dashboard](Images/dashboard.png)
+
+**Dashboard features:**
+
+| Feature | Description |
+|---------|-------------|
+| **6 KPI cards** | Total Orders, Total Net Revenue, Active Customers, Avg Order Value, Returned / Pending, Return Rate |
+| **Monthly Sales Trend** | Interactive Plotly line chart with hover, zoom, and unified tooltip |
+| **Category Performance** | Grouped bar chart comparing revenue and units sold per category |
+| **Revenue by Country** | Top 15 countries by revenue, colored by customer count |
+| **Top 10 Customers** | Data table with customer details and formatted revenue |
+| **Sidebar filters** | Auto-refresh toggle with configurable interval, category multi-select |
+| **Export to Excel** | One-click export button that generates the styled analytics workbook |
+| **Data freshness** | Shows latest order date from the warehouse |
 
 The dashboard uses Streamlit's built-in caching (`@st.cache_data`) so it only queries the database when data expires (5 minutes) or when you click Refresh.
 
 > **Note:** All three features require PostgreSQL to be running with dbt models materialized. Run `make run && make generate-data && make load-data && make dbt-run` first.
+>
+> **Virtual environment reference:**
+> | Environment | Location | Purpose |
+> |-------------|----------|---------|
+> | `.venv` | Project root | Data generation, loading, export, dashboard, status checks |
+> | `.venv-dbt` | Project root | `dbt-core` + `dbt-postgres` only (avoids `mashumaro` conflicts) |
 
 ---
 

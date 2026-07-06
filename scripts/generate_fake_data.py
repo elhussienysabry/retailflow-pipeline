@@ -151,13 +151,15 @@ def generate_customers(num_customers: int) -> str:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-        for _ in range(num_customers):
+        for i in range(num_customers):
+            first = fake.first_name()
+            last = fake.last_name()
             writer.writerow(
                 {
                     "customer_id": str(uuid.uuid4()),
-                    "first_name": fake.first_name(),
-                    "last_name": fake.last_name(),
-                    "email": fake.email(),
+                    "first_name": first,
+                    "last_name": last,
+                    "email": f"{first.lower()}.{last.lower()}.{i:06d}@example.com",
                     "country": fake.country(),
                     "city": fake.city(),
                     "signup_date": fake.date_between(

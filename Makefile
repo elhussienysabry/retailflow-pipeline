@@ -5,7 +5,7 @@
 # Type `make help` to see all available commands.
 # =============================================================================
 
-.PHONY: help setup run stop clean test lint format status export dashboard
+.PHONY: help setup setup-dbt run stop clean test lint format status export dashboard
 
 help:  # Print available commands with descriptions
 	@echo "RetailFlow Pipeline — Available Commands"
@@ -16,8 +16,9 @@ help:  # Print available commands with descriptions
 	@echo "  make stop           Stop all Docker services"
 	@echo "  make generate-data  Run the fake data generation script"
 	@echo "  make load-data      Load generated CSV data into PostgreSQL raw schema"
-	@echo "  make dbt-run        Execute all dbt models (staging → intermediate → marts)"
-	@echo "  make dbt-test       Run dbt data tests on all models"
+  @echo "  make setup-dbt      Create isolated venv for dbt (avoids mashumaro conflicts)"
+  @echo "  make dbt-run        Execute all dbt models (staging → intermediate → marts)"
+  @echo "  make dbt-test       Run dbt data tests on all models"
 	@echo "  make sql-analyze    Run all 4 analytics queries against the warehouse"
   @echo "  make test           Run pytest unit tests"
   @echo "  make status         Run end-to-end pipeline health check"
@@ -64,18 +65,25 @@ load-data:  # Load raw CSVs into PostgreSQL raw schema
 	@.venv\Scripts\python scripts\load_to_postgres.py
 	@echo ">> Data loaded into PostgreSQL raw schema."
 
+setup-dbt:  # Create and install the isolated dbt virtual environment
+	@echo ">> Setting up isolated dbt virtual environment..."
+	@if not exist ".venv-dbt" python -m venv .venv-dbt
+	@echo ">> Installing dbt-core and dbt-postgres..."
+	@.venv-dbt\Scripts\pip install dbt-core==1.7.14 dbt-postgres==1.7.14
+	@echo ">> dbt environment ready. Use '.venv-dbt\\Scripts\\dbt' for dbt commands."
+
 dbt-run:  # Execute dbt models (staging → intermediate → marts)
 	@echo ">> Running dbt staging models..."
-	@cd dbt && ..\.venv\Scripts\dbt run --select staging
+	@cd dbt && ..\.venv-dbt\Scripts\dbt run --select staging
 	@echo ">> Running dbt intermediate models..."
-	@cd dbt && ..\.venv\Scripts\dbt run --select intermediate
+	@cd dbt && ..\.venv-dbt\Scripts\dbt run --select intermediate
 	@echo ">> Running dbt mart models..."
-	@cd dbt && ..\.venv\Scripts\dbt run --select marts
+	@cd dbt && ..\.venv-dbt\Scripts\dbt run --select marts
 	@echo ">> All dbt models executed."
 
 dbt-test:  # Run dbt data tests
 	@echo ">> Running dbt data tests..."
-	@cd dbt && ..\.venv\Scripts\dbt test
+	@cd dbt && ..\.venv-dbt\Scripts\dbt test
 	@echo ">> dbt tests complete."
 
 sql-analyze:  # Execute all 4 analytics queries and show results
