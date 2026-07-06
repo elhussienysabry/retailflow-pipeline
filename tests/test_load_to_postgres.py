@@ -12,13 +12,11 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # WHY: Add the project root to sys.path so we can import the scripts module.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.load_to_postgres import (
+from scripts.load_to_postgres import (  # noqa: E402
     CSV_TABLE_MAP,
     ensure_raw_schema,
     get_engine,

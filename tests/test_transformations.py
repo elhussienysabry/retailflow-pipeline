@@ -10,8 +10,6 @@ Verifies that:
 import sys
 from pathlib import Path
 
-import pytest
-
 # WHY: Add the project root to sys.path so we can import project modules.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))

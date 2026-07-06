@@ -22,7 +22,7 @@ import logging
 import os
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Tuple
 
 from faker import Faker

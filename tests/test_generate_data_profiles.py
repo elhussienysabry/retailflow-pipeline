@@ -14,12 +14,10 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.generate_fake_data import SCALE_PROFILES, parse_args
+from scripts.generate_fake_data import SCALE_PROFILES, parse_args  # noqa: E402
 
 
 class TestScaleProfiles:

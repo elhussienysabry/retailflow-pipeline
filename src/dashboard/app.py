@@ -369,15 +369,13 @@ def render_sidebar() -> Dict[str, Any]:
         with auto_col:
             auto = st.checkbox("Auto-refresh", value=st.session_state.get("auto_refresh", False), key="auto_refresh")
             if auto:
-                interval = st.selectbox(
+                st.selectbox(
                     "Interval",
                     options=[30, 60, 120, 300],
                     format_func=lambda s: f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s",
                     index=1,
                     key="refresh_interval",
                 )
-            else:
-                interval = 0
 
         st.divider()
         st.markdown("**Filters**")
@@ -443,7 +441,7 @@ def _run_export() -> None:
 
 
 def main() -> None:
-    filters = render_sidebar()
+    render_sidebar()
 
     total_orders, total_revenue, active_customers = fetch_kpis(get_engine())
     avg_order_value, non_completed, all_orders = fetch_extra_kpis(get_engine())

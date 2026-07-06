@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple
 
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)

@@ -13,11 +13,10 @@ Verifies that:
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import MagicMock, patch
+from typing import Dict
+from unittest.mock import patch
 
 import pandas as pd
-import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -25,7 +24,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.exports.excel_exporter import (  # noqa: E402
     SHEET_NAMES,
     _format_currency_columns,
-    _style_sheet,
     build_workbook,
     get_engine,
     save_workbook,
