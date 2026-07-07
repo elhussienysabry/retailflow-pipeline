@@ -5,7 +5,7 @@
 # Type `make help` to see all available commands.
 # =============================================================================
 
-.PHONY: help setup setup-dbt run stop clean test lint format status export dashboard
+.PHONY: help setup setup-dbt run stop clean test lint format status export dashboard pipeline
 
 help:  # Print available commands with descriptions
 	@echo "RetailFlow Pipeline — Available Commands"
@@ -23,6 +23,7 @@ help:  # Print available commands with descriptions
   @echo "  make test           Run pytest unit tests"
   @echo "  make status         Run end-to-end pipeline health check"
   @echo "  make export         Export analytics to styled Excel workbook"
+  @echo "  make pipeline       Run full pipeline end-to-end via orchestrator"
   @echo "  make dashboard      Launch the Streamlit analytics dashboard"
 	@echo "  make lint           Run flake8 linting on all Python files"
 	@echo "  make format         Auto-format Python code with black"
@@ -104,6 +105,10 @@ status:  # Run the end-to-end pipeline health check
 export:  # Export analytics to a styled Excel workbook (requires dbt-run first)
 	@echo ">> Exporting analytics to Excel..."
 	@.venv\Scripts\python -m src.exports.excel_exporter
+
+pipeline:  # Run the full pipeline end-to-end via the orchestrator
+	@echo ">> Running full pipeline via orchestrator..."
+	@.venv\Scripts\python scripts\orchestrate.py
 
 dashboard:  # Launch the Streamlit analytics dashboard
 	@echo ">> Starting Streamlit dashboard..."
