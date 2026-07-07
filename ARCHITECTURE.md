@@ -54,6 +54,8 @@ retailflow-pipeline/
 ├── tests/                     # pytest suite (77+ tests)
 ├── data/raw/                  # Generated CSVs (gitignored)
 │   └── .gitkeep
+├── data/rejected/             # Dead Letter Queue — rejected rows (gitignored)
+│   └── .gitkeep
 ├── outputs/                   # Excel exports (gitignored)
 │   └── .gitkeep
 ├── images/                    # Screenshots for README
@@ -96,11 +98,19 @@ retailflow-pipeline/
   .________________________.
   |  INGESTION (Python)    |       load_to_postgres.py
   |  CSV  ──>  PostgreSQL  |       Truncate + insert (idempotent)
-  |         raw schema     |       Schema: raw.customers, raw.products, raw.orders
+  |         raw schema     |       Guardrails validate rows before insert
   |________________________|
-              |
-              | PostgreSQL (port 5432)
-              v
+         |            |
+         | clean      | bad rows
+         | rows       v
+         |         .________________.
+         |         |  DEAD LETTER   |
+         |         |  QUEUE (DLQ)   |
+         |         |  data/rejected/|
+         |         |________________|
+         |
+         | PostgreSQL (port 5432)
+         v
   .________________________.
   |  dbt STAGING LAYER     |       stg_customers, stg_orders, stg_products
   |  (staging schema)      |       Clean: trim, cast, deduplicate
@@ -165,13 +175,28 @@ retailflow-pipeline/
 
 ### CSV Loader — `scripts/load_to_postgres.py`
 
-**Purpose:** Stream CSV contents into the PostgreSQL `raw` schema.
+**Purpose:** Stream CSV contents into the PostgreSQL `raw` schema with data quality guardrails.
 
 **Behavior:**
 - Creates `raw` schema if missing (`CREATE SCHEMA IF NOT EXISTS`)
 - Truncates each target table before loading (idempotent)
 - Uses `pandas.read_csv(chunksize=10_000)` + `to_sql(method="multi")` for memory-efficient bulk inserts
 - Column types: UUIDs as `string`, dates as `string` (cast later in dbt)
+
+**Data Quality Guardrails (per entity):**
+
+| Entity | Check | Rejection reason |
+|--------|-------|------------------|
+| Customers | `customer_id` not null, email contains `@` | `missing customer_id`, `missing email`, `malformed email (missing @)` |
+| Products | `product_id` not null, `price_cents >= 0` | `missing product_id`, `missing price_cents`, `negative price_cents` |
+| Orders | `order_id`/`customer_id`/`product_id` not null, `quantity >= 0`, `discount_pct` in `[0, 100]` | `missing order_id`, `missing customer_id`, `missing product_id`, `negative quantity`, `discount_pct out of range` |
+
+**Dead Letter Queue (DLQ):**
+- Bad rows are **not** silently dropped — they are isolated to `data/rejected/`
+- Each rejected row gets a `rejection_reason` column describing the violation
+- DLQ files are timestamped (`rejected_orders_20260707_033908.csv`) to prevent collisions across runs
+- The pipeline continues normally; only clean rows reach PostgreSQL
+- The orchestrator captures and logs the loaded vs. rejected count at the end of the ingestion step
 
 ---
 
@@ -275,6 +300,7 @@ The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG:
 | **Streaming output** | `stdout=subprocess.PIPE` with real-time line-by-line printing so the user sees progress as it happens |
 | **Run duration** | Each step is timed with `time.monotonic()`; total pipeline time is printed on completion |
 | **Profile propagation** | `--profile` is parsed at the orchestrator level and forwarded to `generate_fake_data.py` |
+| **DLQ summary capture** | Step 2 output is scanned for a `DLQ_SUMMARY:` JSON line; orchestrator logs loaded vs. rejected counts per table |
 | **dbt step splitting** | `dbt run` is split into 3 sub-steps (`staging`, `intermediate`, `marts`) with individual failure handling |
 
 ### Usage

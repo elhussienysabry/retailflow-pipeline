@@ -12,13 +12,14 @@ If any step fails, the pipeline halts immediately (circuit breaker).
 """
 
 import argparse
+import json
 import logging
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, NamedTuple, Tuple
 
 logger = logging.getLogger("orchestrate")
 
@@ -31,6 +32,13 @@ STEP_HEADER = """
 
 STEP_OK = "  OK  {name} completed in {elapsed:.2f}s"
 STEP_FAIL = "  FAIL  {name} FAILED (exit code {code})"
+
+
+class CommandResult(NamedTuple):
+    """Result of a subprocess execution with captured output lines."""
+
+    returncode: int
+    output: List[str]
 
 
 def _py_exe() -> str:
@@ -53,8 +61,10 @@ def _step_box(num: int, total: int, name: str) -> str:
     )
 
 
-def _run_command(cmd: List[str], cwd: Path = None, label: str = "") -> int:
-    """Execute a subprocess and stream output in real time.
+def _run_command(
+    cmd: List[str], cwd: Path = None, label: str = ""
+) -> CommandResult:
+    """Execute a subprocess, stream output in real time, and capture lines.
 
     Args:
         cmd: Command list (e.g. [python.exe, "script.py", "--flag"]).
@@ -62,7 +72,7 @@ def _run_command(cmd: List[str], cwd: Path = None, label: str = "") -> int:
         label: Human-readable label for log messages.
 
     Returns:
-        subprocess return code (0 = success).
+        CommandResult with return code and captured output lines.
     """
     cwd = cwd or PROJECT_ROOT
     logger.info("Running: %s", " ".join(str(c) for c in cmd))
@@ -77,30 +87,73 @@ def _run_command(cmd: List[str], cwd: Path = None, label: str = "") -> int:
         encoding="utf-8",
     )
 
+    output_lines: List[str] = []
     for line in proc.stdout:
         sys.stdout.write(line)
         sys.stdout.flush()
+        output_lines.append(line.rstrip("\n"))
 
     proc.wait()
-    return proc.returncode
+    return CommandResult(proc.returncode, output_lines)
 
+
+# ---------------------------------------------------------------------------
+# DLQ summary parsing
+# ---------------------------------------------------------------------------
+
+def _log_dlq_summary(output_lines: List[str]) -> None:
+    """Search captured output for a ``DLQ_SUMMARY:`` JSON line and log it."""
+    for line in output_lines:
+        if line.startswith("DLQ_SUMMARY:"):
+            try:
+                data = json.loads(line[len("DLQ_SUMMARY:"):])
+                loaded = data.get("loaded", 0)
+                rejected = data.get("rejected", 0)
+                logger.info(
+                    "DLQ Ingestion Summary — loaded=%d clean, "
+                    "rejected=%d to Dead Letter Queue",
+                    loaded,
+                    rejected,
+                )
+                tables = data.get("tables", {})
+                for csv_name, counts in tables.items():
+                    logger.info(
+                        "  %s → loaded=%d  rejected=%d",
+                        csv_name,
+                        counts.get("loaded", 0),
+                        counts.get("rejected", 0),
+                    )
+            except (json.JSONDecodeError, KeyError):
+                logger.warning("Could not parse DLQ summary: %s", line)
+            break
+
+
+# ---------------------------------------------------------------------------
+# Pipeline step implementations
+# ---------------------------------------------------------------------------
 
 def step_generate_data(profile: str = "medium") -> int:
     """Step 1: Generate synthetic CSV data via Faker."""
-    total = _run_command(
-        [_py_exe(), str(PROJECT_ROOT / "scripts" / "generate_fake_data.py"),
-         "--profile", profile],
+    result = _run_command(
+        [
+            _py_exe(),
+            str(PROJECT_ROOT / "scripts" / "generate_fake_data.py"),
+            "--profile",
+            profile,
+        ],
         label="generate-fake-data",
     )
-    return total
+    return result.returncode
 
 
 def step_load_to_postgres() -> int:
-    """Step 2: Load CSV files into PostgreSQL raw schema."""
-    return _run_command(
+    """Step 2: Load CSV files into PostgreSQL raw schema with DLQ guardrail."""
+    result = _run_command(
         [_py_exe(), str(PROJECT_ROOT / "scripts" / "load_to_postgres.py")],
         label="load-to-postgres",
     )
+    _log_dlq_summary(result.output)
+    return result.returncode
 
 
 def step_dbt_run() -> int:
@@ -110,31 +163,33 @@ def step_dbt_run() -> int:
 
     for model_group in ("staging", "intermediate", "marts"):
         logger.info("--- dbt run --select %s ---", model_group)
-        rc = _run_command(
+        result = _run_command(
             [dbt, "run", "--select", model_group],
             cwd=dbt_dir,
             label=f"dbt-run-{model_group}",
         )
-        if rc != 0:
-            return rc
+        if result.returncode != 0:
+            return result.returncode
     return 0
 
 
 def step_dbt_test() -> int:
     """Step 4: Run dbt data quality tests."""
-    return _run_command(
+    result = _run_command(
         [_dbt_exe(), "test"],
         cwd=PROJECT_ROOT / "dbt",
         label="dbt-test",
     )
+    return result.returncode
 
 
 def step_excel_export() -> int:
     """Step 5: Export analytics to a styled Excel workbook."""
-    return _run_command(
+    result = _run_command(
         [_py_exe(), "-m", "src.exports.excel_exporter"],
         label="excel-export",
     )
+    return result.returncode
 
 
 PIPELINE_STEPS: List[Tuple[str, callable]] = [
