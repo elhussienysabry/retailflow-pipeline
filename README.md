@@ -624,7 +624,42 @@ The dashboard uses Streamlit's built-in caching (`@st.cache_data`) so it only qu
 
 ---
 
-## 14. CI/CD Pipeline (GitHub Actions)
+## 14. Orchestration Layer
+
+The project includes a centralized orchestrator at `scripts/orchestrate.py` that runs the full pipeline as a single command, managing virtual environment switching automatically.
+
+### Pipeline DAG
+
+```
+[1] Generate Data ──> [2] Load PostgreSQL ──> [3] dbt Run ──> [4] dbt Test ──> [5] Excel Export
+```
+
+Each step runs in its correct virtual environment:
+- Steps 1, 2, 5 → `.venv\Scripts\python.exe`
+- Steps 3, 4 → `.venv-dbt\Scripts\dbt.exe`
+
+### Circuit Breaker
+
+If any step returns a non-zero exit code, the orchestrator logs a critical error, halts immediately, and exits with code 1. Subsequent steps are never executed.
+
+### Usage
+
+```bash
+# Run full pipeline with default medium profile
+python scripts/orchestrate.py
+
+# Run with a specific scale profile
+python scripts/orchestrate.py --profile small
+
+# Via Make
+make pipeline
+```
+
+The orchestrator outputs clear visual boundaries with timestamps, step durations, and a final summary showing total runtime.
+
+---
+
+## 15. CI/CD Pipeline (GitHub Actions)
 
 This project includes a fully automated CI/CD workflow via GitHub Actions.
 
