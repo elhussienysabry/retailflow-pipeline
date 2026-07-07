@@ -36,8 +36,10 @@ Thumbs.db
 # --- Data ---
 data/raw/*
 data/processed/*
+data/rejected/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/rejected/.gitkeep
 
 # --- Airflow ---
 airflow/logs/
