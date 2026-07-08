@@ -1,13 +1,15 @@
 # =============================================================================
 # RetailFlow Pipeline — Docker Compose
 # =============================================================================
-# Runs PostgreSQL (the data warehouse) + pgAdmin (optional GUI) locally.
-# All services share the same Docker network for communication.
+# Orchestrates three services:
+#   db   — PostgreSQL 15 warehouse (with healthcheck)
+#   app  — Streamlit dashboard + full ETL pipeline
+#   pgadmin — Web-based PostgreSQL admin (optional)
 #
 # Usage:
-#   docker compose up -d              # Start all services
+#   docker compose up -d              # Start all services (detached)
+#   docker compose up --build         # Rebuild and start (foreground)
 #   docker compose down               # Stop all services
-#   docker compose logs -f postgres   # Follow PostgreSQL logs
 # =============================================================================
 
 version: "3.8"
@@ -16,28 +18,58 @@ services:
   # ---------------------------------------------------------------
   # PostgreSQL 15 — our data warehouse
   # ---------------------------------------------------------------
-  postgres:
+  db:
     image: postgres:15-alpine
-    container_name: retailflow-postgres
+    container_name: retailflow-db
     restart: unless-stopped
     ports:
-      # WHY: Map host port 5432 to container port 5432 so local tools
-      # (like psql, dbt, Airflow) can reach the database.
+      # Map host port 5432 so local tools (psql, dbt, Airflow)
+      # can reach the database on localhost:5432.
       - "5432:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-retailflow}
       POSTGRES_USER: ${POSTGRES_USER:-retailflow_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retailflow_pass}
     volumes:
-      # WHY: Named volume persists data across container restarts.
       - postgres_data:/var/lib/postgresql/data
-      # WHY: Auto-run schema scripts on first startup.
+      # Auto-run schema init scripts on first startup.
       - ./sql/schema:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-retailflow_user} -d ${POSTGRES_DB:-retailflow}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
+
+  # ---------------------------------------------------------------
+  # App — Streamlit dashboard + ETL pipeline
+  # ---------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: retailflow-app
+    restart: unless-stopped
+    ports:
+      # Streamlit GUI
+      - "8501:8501"
+    environment:
+      # Inside the Docker network the database is known as 'db',
+      # not 'localhost'.  The Python scripts read these env vars at
+      # runtime, so they adapt automatically (see get_engine()).
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-retailflow}
+      POSTGRES_USER: ${POSTGRES_USER:-retailflow_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retailflow_pass}
+      # dbt executable override for the cross-platform orchestrator
+      DBT_EXECUTABLE: /opt/dbt-venv/bin/dbt
+    depends_on:
+      db:
+        condition: service_healthy
+    # Default CMD is defined in the Dockerfile (streamlit run).
+    # Override to run the pipeline instead:
+    #   command: ["python", "scripts/orchestrate.py", "--profile", "small"]
 
   # ---------------------------------------------------------------
   # pgAdmin — web-based PostgreSQL admin (optional, for debugging)
@@ -54,7 +86,7 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
 
 volumes:

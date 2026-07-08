@@ -15,8 +15,9 @@
 6. [Layer 4 — Orchestration Layer](#6-layer-4--orchestration-layer)
 7. [Layer 5 — Consumption Layer (Business-Facing)](#7-layer-5--consumption-layer-business-facing)
 8. [Quality Guardrails — CI/CD Pipeline](#8-quality-guardrails--cicd-pipeline)
-9. [Virtual Environment Strategy](#9-virtual-environment-strategy)
-10. [Step-by-Step Execution Sequence](#10-step-by-step-execution-sequence)
+9. [Containerization & Deployment](#9-containerization--deployment)
+10. [Virtual Environment Strategy](#10-virtual-environment-strategy)
+11. [Step-by-Step Execution Sequence](#11-step-by-step-execution-sequence)
 
 ---
 
@@ -441,7 +442,110 @@ Browser ← HTTP/WS ← Streamlit Server ← SQLAlchemy ← PostgreSQL
 
 ---
 
-## 9. Virtual Environment Strategy
+## 9. Containerization & Deployment
+
+The project is fully containerized via Docker Compose with two core services:
+
+| Service | Container | Base Image | Purpose |
+|---------|-----------|------------|---------|
+| `db` | `retailflow-db` | `postgres:15-alpine` | PostgreSQL warehouse with `pg_isready` healthcheck |
+| `app` | `retailflow-app` | `python:3.12-slim` (via `Dockerfile`) | Streamlit dashboard + ETL orchestration |
+| `pgadmin` | `retailflow-pgadmin` | `dpage/pgadmin4:latest` | Web-based PostgreSQL admin (optional) |
+
+### Dockerfile Architecture
+
+The `Dockerfile` uses four logical layers for optimal caching:
+
+```
+Layer 1: System deps (gcc, libpq-dev, curl)
+         └── RUN apt-get install ...
+Layer 2: Core Python deps (pandas, streamlit, airflow, GE, ...)
+         └── RUN pip install ...
+Layer 3: Isolated dbt venv (/opt/dbt-venv)
+         └── dbt-core==1.7.14 + dbt-postgres==1.7.14
+Layer 4: Application code (scripts/, src/, dbt/, tests/)
+```
+
+**Why an isolated dbt venv?** `dbt-core` 1.7.x pins `mashumaro<4` while Airflow and Great Expectations require `mashumaro>=4`. Installing dbt in a separate venv with a symlink into `PATH` avoids the conflict while keeping both runtimes accessible.
+
+### Cross-Platform Orchestrator
+
+The `_dbt_exe()` and `_py_exe()` functions in `scripts/orchestrate.py` now detect the platform:
+
+| Platform | `_py_exe()` | `_dbt_exe()` |
+|----------|-------------|--------------|
+| Windows (local) | `.venv\Scripts\python.exe` | `.venv-dbt\Scripts\dbt.exe` |
+| Linux (container) | `sys.executable` | `$DBT_EXECUTABLE` env var (→ `/opt/dbt-venv/bin/dbt`) |
+
+### Network Configuration
+
+Inside the Docker network, the database is reachable as `db` (the Compose service name). The `app` service receives `POSTGRES_HOST: db` via its `environment` block, overriding the `.env` default of `localhost`. All Python connection helpers (`get_engine()`) read from env vars at runtime, so they adapt automatically — no code changes needed.
+
+### Deployment Runbook
+
+**Prerequisites:**
+- Docker Engine 24+ and Docker Compose v2 installed
+- Ports 5432, 8501, 5050 free on the host
+
+**Step 1 — Build & Launch (single command):**
+
+```bash
+docker compose up --build
+```
+
+This single command:
+1. Builds the `app` image from the Dockerfile
+2. Pulls `postgres:15-alpine` and `dpage/pgadmin4:latest`
+3. Starts `db` first (with 15s grace period healthcheck)
+4. Starts `app` only after `db` reports healthy
+5. Starts `pgadmin` after `db` is healthy
+6. Mounts volumes for persistent data
+7. Maps ports: 5432 (Postgres), 8501 (Streamlit), 5050 (pgAdmin)
+
+**Step 2 — Access the Dashboard:**
+
+Open [http://localhost:8501](http://localhost:8501) in your browser. The Streamlit dashboard connects to the containerized PostgreSQL via the `db` hostname automatically.
+
+**Step 3 — Run the Full Pipeline inside the Container:**
+
+```bash
+# Exec into the running app container
+docker exec -it retailflow-app python scripts/orchestrate.py --profile small
+
+# Or override the default CMD at launch:
+docker compose run --rm app python scripts/orchestrate.py --profile small
+```
+
+**Step 4 — Tear Down:**
+
+```bash
+docker compose down          # Stop containers
+docker compose down -v       # Stop + delete volumes (⚠️ destroys data)
+```
+
+### Service Dependency Graph
+
+```
+docker compose up --build
+        │
+        ▼
+    ┌──────┐
+    │  db  │  (postgres:15-alpine, port 5432)
+    │      │  healthcheck: pg_isready
+    └──┬───┘
+       │ condition: service_healthy
+       ├──────────────────┐
+       ▼                  ▼
+   ┌──────┐         ┌──────────┐
+   │ app  │         │ pgadmin  │
+   │port  │         │ port     │
+   │ 8501 │         │ 5050     │
+   └──────┘         └──────────┘
+```
+
+---
+
+## 10. Virtual Environment Strategy
 
 The project uses **two independent Python virtual environments** to isolate conflicting dependency chains.
 
@@ -465,7 +569,7 @@ make pipeline         # Uses .venv\Scripts\python scripts\orchestrate.py
 
 ---
 
-## 10. Step-by-Step Execution Sequence
+## 11. Step-by-Step Execution Sequence
 
 > Use this checklist when cloning the repo onto a **fresh machine**. Run commands in order.
 
