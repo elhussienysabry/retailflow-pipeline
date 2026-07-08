@@ -853,6 +853,9 @@ Discord alerts use embedded messages with a colour bar matching the status:
 }
 ```
 
+
+![RetailFlow Discord](images/Discord.png)
+
 ---
 
 ## 19. Glossary
