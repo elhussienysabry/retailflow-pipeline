@@ -64,6 +64,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retailflow_pass}
       # dbt executable override for the cross-platform orchestrator
       DBT_EXECUTABLE: /opt/dbt-venv/bin/dbt
+      # Webhook URL for pipeline alerts (set in .env)
+      PIPELINE_WEBHOOK_URL: ${PIPELINE_WEBHOOK_URL:-}
     depends_on:
       db:
         condition: service_healthy

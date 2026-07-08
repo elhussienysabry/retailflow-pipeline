@@ -9,6 +9,11 @@ Executes the end-to-end data pipeline as a sequential DAG:
 
 Each step runs in its correct virtual environment (.venv or .venv-dbt).
 If any step fails, the pipeline halts immediately (circuit breaker).
+
+Alerts are dispatched to a Slack/Discord webhook at key states:
+    - Ingestion phase: warning alert when rows are sent to the DLQ
+    - dbt test failure: critical alert before circuit breaker exit
+    - Pipeline completion: success summary alert
 """
 
 import argparse
@@ -20,7 +25,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, NamedTuple, Tuple
+from typing import Any, Dict, List, NamedTuple, Tuple
 
 logger = logging.getLogger("orchestrate")
 
@@ -33,6 +38,26 @@ STEP_HEADER = """
 
 STEP_OK = "  OK  {name} completed in {elapsed:.2f}s"
 STEP_FAIL = "  FAIL  {name} FAILED (exit code {code})"
+
+# ── Alerting ────────────────────────────────────────────────────────────
+# Graceful import: try the package path first, then the sibling path.
+_ALERTS_AVAILABLE = False
+send_pipeline_alert = None  # type: ignore
+try:
+    from scripts.alerts import send_pipeline_alert  # noqa: E402
+    _ALERTS_AVAILABLE = True
+except ImportError:
+    try:
+        from alerts import send_pipeline_alert  # noqa: E402, F811
+        _ALERTS_AVAILABLE = True
+    except ImportError:
+        pass
+
+if not _ALERTS_AVAILABLE:
+    logger.info("scripts.alerts not available — alerts disabled.")
+
+# Store the last parsed DLQ data so alert functions can reference it.
+_last_dlq_data: Dict[str, Any] = {}
 
 
 class CommandResult(NamedTuple):
@@ -115,39 +140,128 @@ def _run_command(
 
 
 # ---------------------------------------------------------------------------
-# DLQ summary parsing
+# DLQ summary parsing & alerting
 # ---------------------------------------------------------------------------
 
-def _log_dlq_summary(output_lines: List[str]) -> None:
-    """Search captured output for a ``DLQ_SUMMARY:`` JSON line and log it."""
+
+def _parse_dlq_data(output_lines: List[str]) -> Dict[str, Any]:
+    """Extract DLQ summary dict from captured subprocess output."""
     for line in output_lines:
         if line.startswith("DLQ_SUMMARY:"):
             try:
-                data = json.loads(line[len("DLQ_SUMMARY:"):])
-                loaded = data.get("loaded", 0)
-                rejected = data.get("rejected", 0)
-                logger.info(
-                    "DLQ Ingestion Summary — loaded=%d clean, "
-                    "rejected=%d to Dead Letter Queue",
-                    loaded,
-                    rejected,
-                )
-                tables = data.get("tables", {})
-                for csv_name, counts in tables.items():
-                    logger.info(
-                        "  %s → loaded=%d  rejected=%d",
-                        csv_name,
-                        counts.get("loaded", 0),
-                        counts.get("rejected", 0),
-                    )
+                return json.loads(line[len("DLQ_SUMMARY:"):])
             except (json.JSONDecodeError, KeyError):
                 logger.warning("Could not parse DLQ summary: %s", line)
             break
+    return {}
+
+
+def _log_dlq_summary(output_lines: List[str]) -> None:
+    """Search captured output for a ``DLQ_SUMMARY:`` JSON line, log it,
+    and stash the parsed data for the alerting hook."""
+    global _last_dlq_data
+    data = _parse_dlq_data(output_lines)
+    if not data:
+        return
+
+    _last_dlq_data = data
+    loaded = data.get("loaded", 0)
+    rejected = data.get("rejected", 0)
+
+    logger.info(
+        "DLQ Ingestion Summary — loaded=%d clean, "
+        "rejected=%d to Dead Letter Queue",
+        loaded,
+        rejected,
+    )
+    tables = data.get("tables", {})
+    for csv_name, counts in tables.items():
+        logger.info(
+            "  %s → loaded=%d  rejected=%d",
+            csv_name,
+            counts.get("loaded", 0),
+            counts.get("rejected", 0),
+        )
+
+
+def _send_ingestion_alert() -> None:
+    """Dispatch a warning-level alert if any rows were sent to the DLQ
+    during the ingestion phase."""
+    if not _ALERTS_AVAILABLE:
+        return
+    rejected = _last_dlq_data.get("rejected", 0)
+    if rejected <= 0:
+        return
+
+    loaded = _last_dlq_data.get("loaded", 0)
+    total = loaded + rejected
+    pct = (rejected / total * 100) if total > 0 else 0.0
+
+    send_pipeline_alert(
+        status="warning",
+        stage="ingestion",
+        details={
+            "Loaded Rows": loaded,
+            "Rejected Rows": rejected,
+            "Rejection Rate": f"{pct:.1f}%",
+        },
+    )
+
+
+def _send_step_failure_alert(step_name: str, rc: int) -> None:
+    """Dispatch a critical alert when a step fails and the circuit breaker
+    halts the pipeline.  dbt test failures get a specific message."""
+    if not _ALERTS_AVAILABLE:
+        return
+
+    if step_name == "dbt Test":
+        send_pipeline_alert(
+            status="critical",
+            stage="dbt-test",
+            details={
+                "Error": (
+                    "\U0001F4A5 Pipeline Broken: "
+                    "dbt Data Quality Tests Failed at Stage: dbt Test"
+                ),
+                "Exit Code": rc,
+            },
+        )
+    else:
+        send_pipeline_alert(
+            status="critical",
+            stage=step_name.lower().replace(" ", "-"),
+            details={
+                "Error": "Pipeline halted by circuit breaker",
+                "Exit Code": rc,
+            },
+        )
+
+
+def _send_success_alert(total_elapsed: float) -> None:
+    """Dispatch a success alert at the end of the pipeline."""
+    if not _ALERTS_AVAILABLE:
+        return
+
+    details: Dict[str, Any] = {
+        "Total Steps": 5,
+        "Duration": f"{total_elapsed:.2f}s",
+    }
+
+    rejected = _last_dlq_data.get("rejected", 0)
+    if rejected is not None and rejected > 0:
+        details["DLQ Rejected"] = rejected
+
+    send_pipeline_alert(
+        status="success",
+        stage="pipeline-complete",
+        details=details,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Pipeline step implementations
 # ---------------------------------------------------------------------------
+
 
 def step_generate_data(profile: str = "medium") -> int:
     """Step 1: Generate synthetic CSV data via Faker."""
@@ -282,8 +396,13 @@ def main() -> None:
 
         if rc == 0:
             logger.info(STEP_OK.format(name=step_name, elapsed=elapsed))
+            # Send ingestion-phase warning alert if rows were rejected.
+            if step_name == "Load to PostgreSQL":
+                _send_ingestion_alert()
         else:
             logger.critical(STEP_FAIL.format(name=step_name, code=rc))
+            # Circuit breaker: dispatch critical alert before exiting.
+            _send_step_failure_alert(step_name, rc)
             print()
             print("+" + "=" * 70 + "+")
             print("|  FAIL  PIPELINE HALTED")
@@ -295,6 +414,8 @@ def main() -> None:
         print()
 
     total_elapsed = time.monotonic() - pipeline_start
+    _send_success_alert(total_elapsed)
+
     print()
     print("+" + "=" * 70 + "+")
     print("|  OK  PIPELINE COMPLETE")
