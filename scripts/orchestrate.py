@@ -5,7 +5,7 @@ RetailFlow Pipeline — Orchestrator
 Executes the end-to-end data pipeline as a sequential DAG:
 
     Generate Data ──> Load to Postgres ──> dbt Run
-    ──> dbt Test ──> Excel Export
+    ──> dbt Test ──> Excel Export ──> dbt Docs Generate
 
 Each step runs in its correct virtual environment (.venv or .venv-dbt).
 If any step fails, the pipeline halts immediately (circuit breaker).
@@ -96,7 +96,7 @@ def _dbt_exe() -> str:
 def _step_box(num: int, total: int, name: str) -> str:
     width = 68
     sep = "-" * width
-    icons = ["[DATA]", "[LOAD]", "[DBT]", "[TEST]", "[EXCEL]"]
+    icons = ["[DATA]", "[LOAD]", "[DBT]", "[TEST]", "[EXCEL]", "[DOCS]"]
     icon = icons[num - 1] if num <= len(icons) else "[...]"
     return STEP_HEADER.format(
         sep=sep, emoji=icon, num=num, total=total, name=name
@@ -243,7 +243,7 @@ def _send_success_alert(total_elapsed: float) -> None:
         return
 
     details: Dict[str, Any] = {
-        "Total Steps": 5,
+        "Total Steps": len(PIPELINE_STEPS),
         "Duration": f"{total_elapsed:.2f}s",
     }
 
@@ -323,12 +323,33 @@ def step_excel_export() -> int:
     return result.returncode
 
 
+def step_dbt_docs_generate() -> int:
+    """Step 6: Compile dbt project and generate documentation artifacts."""
+
+    # Fresh manifest.json ensures catalog.json is in sync.
+    result = _run_command(
+        [_dbt_exe(), "compile"],
+        cwd=PROJECT_ROOT / "dbt",
+        label="dbt-compile",
+    )
+    if result.returncode != 0:
+        return result.returncode
+
+    result = _run_command(
+        [_dbt_exe(), "docs", "generate"],
+        cwd=PROJECT_ROOT / "dbt",
+        label="dbt-docs-generate",
+    )
+    return result.returncode
+
+
 PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("Generate Data", step_generate_data),
     ("Load to PostgreSQL", step_load_to_postgres),
     ("dbt Run", step_dbt_run),
     ("dbt Test", step_dbt_test),
     ("Excel Export", step_excel_export),
+    ("dbt Docs Generate", step_dbt_docs_generate),
 ]
 
 
