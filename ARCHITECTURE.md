@@ -17,7 +17,9 @@
 8. [Quality Guardrails — CI/CD Pipeline](#8-quality-guardrails--cicd-pipeline)
 9. [Containerization & Deployment](#9-containerization--deployment)
 10. [Virtual Environment Strategy](#10-virtual-environment-strategy)
-11. [Step-by-Step Execution Sequence](#11-step-by-step-execution-sequence)
+11. [Layer 6 — Observability & Alerting](#11-layer-6--observability--alerting)
+12. [Layer 7 — Data Governance & Lineage](#12-layer-7--data-governance--lineage)
+13. [Step-by-Step Execution Sequence](#13-step-by-step-execution-sequence)
 
 ---
 
@@ -105,10 +107,10 @@ retailflow-pipeline/
          | clean      | bad rows
          | rows       v
          |         .________________.
-         |         |  DEAD LETTER   |
-         |         |  QUEUE (DLQ)   |
-         |         |  data/rejected/|
-         |         |________________|
+         |         |  DEAD LETTER   │
+         |         │  QUEUE (DLQ)   │       Layer 1 — Guardrails
+         |         │  data/rejected/│       Isolated, timestamped CSVs
+         |         │________________│       with rejection_reason column
          |
          | PostgreSQL (port 5432)
          v
@@ -131,24 +133,39 @@ retailflow-pipeline/
   |  (marts schema)        |       Star schema: dims + fact
   |________________________|       Revenue converted to dollars
               |
-              |                  .________________________.
-              |                  |  ORCHESTRATION LAYER    |
-              |                  |  (scripts/orchestrate)  |
-              +----------------> |  Sequential DAG         |
-              |                  |  Automatic venv switch  |
-              |                  |  Circuit breaker        |
-              |                  |________________________|
-              |                             |
-              |                  ┌──────────┴──────────┐
-              |                  │                     │
-              v                  v                     v
-  .________________________.    ._____________________________.
-  |  STREAMLIT DASHBOARD   |    |  EXCEL EXPORTER             |
-  |  (src/dashboard/app.py) |    |  (src/exports/             |
-  |  Live KPI monitoring   |    |   excel_exporter.py)        |
-  |  Plotly charts         |    |  4 analytics sheets         |
-  |  5-min cache + refresh |    |  Styled .xlsx output        |
-  |________________________|    |_____________________________|
+              |                  .____________________________________.
+              |                  │   ORCHESTRATION LAYER (Layer 4)    │
+              |                  │   scripts/orchestrate.py           │
+              +----------------> │   1. Generate Data   (.venv)       │
+              |                  │   2. Load PostgreSQL (.venv)       │
+              |                  │   3. dbt Run         (.venv-dbt)   │
+              |                  │   4. dbt Test        (.venv-dbt)   │
+              |                  │   5. Excel Export    (.venv)       │
+              |                  │   6. dbt Docs Gen.   (.venv-dbt)   │  NEW
+              |                  │                                    │
+              |                  │   Circuit breaker: halt on failure │
+              |                  │   Alerts dispatched at key states  │
+              |                  │____________________________________│
+              |                             |           |
+              |                  ┌──────────┴──────────┐ │
+              |                  │                     │ │
+              v                  v                     v v
+  .________________________.    ._____________________________.   .___________________________.
+  |  STREAMLIT DASHBOARD   |    |  EXCEL EXPORTER             |   │  ALERTING ENGINE          │
+  |  (src/dashboard/app.py) |    |  (src/exports/             |   │  scripts/alerts.py         │
+  |  Live KPI monitoring   |    |   excel_exporter.py)        |   │  Discord / Slack webhook   │
+  |  Plotly charts         |    |  4 analytics sheets         |   │  Colour-coded embeds       │
+  |  5-min cache + refresh |    |  Styled .xlsx output        |   │  (green/amber/red)         │
+  |________________________|    |_____________________________|   │  Graceful skip if unset    │
+                                                                  │____________________________│
+                                                                             |
+                                                                  .___________________________.
+                                                                  │  dbt DOCS GENERATE         │
+                                                                  │  dbt docs generate         │
+                                                                  │  Metadata catalog +        │
+                                                                  │  interactive lineage       │
+                                                                  │  graph (make docs to view) │
+                                                                  │____________________________│
 ```
 
 ---
@@ -284,37 +301,42 @@ marts        (schema)  — 3 tables, created by dbt
 
 **Script:** `scripts/orchestrate.py`
 
-The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG:
+The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG with 6 steps:
 
 ```
-[1] Generate Data ──> [2] Load PostgreSQL ──> [3] dbt Run ──> [4] dbt Test ──> [5] Excel Export
+[1] Generate Data  ──> [2] Load PostgreSQL  ──> [3] dbt Run  ──> [4] dbt Test  ──> [5] Excel Export  ──> [6] dbt Docs
 
-  (.venv)                 (.venv)              (.venv-dbt)      (.venv-dbt)        (.venv)
+  (.venv)                (.venv)               (.venv-dbt)      (.venv-dbt)       (.venv)            (.venv-dbt)
 ```
 
 ### Key Design Decisions
 
 | Concern | Implementation |
 |---------|---------------|
-| **Environment switching** | Each step resolves the correct executable: `.venv\Scripts\python.exe` for steps 1, 2, 5; `.venv-dbt\Scripts\dbt.exe` for steps 3, 4 |
+| **Environment switching** | Each step resolves the correct executable: `.venv\Scripts\python.exe` for steps 1, 2, 5; `.venv-dbt\Scripts\dbt.exe` for steps 3, 4, 6 |
 | **Circuit breaker** | `subprocess.Popen` runs each step; non-zero `returncode` triggers `sys.exit(1)` before proceeding to the next step |
 | **Streaming output** | `stdout=subprocess.PIPE` with real-time line-by-line printing so the user sees progress as it happens |
 | **Run duration** | Each step is timed with `time.monotonic()`; total pipeline time is printed on completion |
 | **Profile propagation** | `--profile` is parsed at the orchestrator level and forwarded to `generate_fake_data.py` |
 | **DLQ summary capture** | Step 2 output is scanned for a `DLQ_SUMMARY:` JSON line; orchestrator logs loaded vs. rejected counts per table |
 | **dbt step splitting** | `dbt run` is split into 3 sub-steps (`staging`, `intermediate`, `marts`) with individual failure handling |
+| **Alerting hooks** | Warning on DLQ rejection > 0, critical on dbt test failure, success recap on completion all dispatched via `scripts/alerts.py` |
+| **Metadata docs** | Step 6 runs `dbt docs generate` inside `.venv-dbt` to produce the interactive catalog and lineage graph |
 
 ### Usage
 
 ```bash
-# Default medium profile
+# Single unified command (default medium profile)
 python scripts/orchestrate.py
 
-# Small profile (fast for testing)
+# Fast testing with small profile
 python scripts/orchestrate.py --profile small
 
 # Via Make shortcut
 make pipeline
+
+# Launch the dbt metadata portal (after pipeline)
+make docs
 ```
 
 ### CLI Reference
@@ -569,7 +591,104 @@ make pipeline         # Uses .venv\Scripts\python scripts\orchestrate.py
 
 ---
 
-## 11. Step-by-Step Execution Sequence
+## 11. Layer 6 — Observability & Alerting
+
+**Script:** `scripts/alerts.py`
+
+The alerting engine provides real-time observability by dispatching colour-coded messages to a **Discord** or **Slack** webhook at key pipeline states. It integrates directly into the orchestrator's circuit breaker and DLQ guardrail.
+
+### Architecture
+
+```
+Pipeline Event ──> orchestrator ──> send_pipeline_alert()
+                                          │
+                                    ┌─────┴─────┐
+                                    │           │
+                                    ▼           ▼
+                               Discord      Slack
+                               (embed)   (attachment)
+```
+
+### Alert Triggers
+
+| Status | Colour  | When |
+|--------|---------|------|
+| `success`  | Green  | All 6 steps complete successfully |
+| `warning`  | Amber  | Ingestion finishes with DLQ rejected rows > 0 |
+| `critical` | Red    | dbt tests fail (circuit breaker fires) |
+
+### Key Design Decisions
+
+| Concern | Implementation |
+|---------|---------------|
+| **Auto-detection** | URL pattern determines Discord vs Slack payload format |
+| **No dependency** | Graceful skip if `PIPELINE_WEBHOOK_URL` is unset (logs "Webhook not configured, skipping live alert.") |
+| **Colour coding** | Discord embeds use `color` field: `0x57F287` (green), `0xFEE75C` (amber), `0xED4245` (red) |
+| **Cloudflare bypass** | Custom `User-Agent` header mimics a real browser to avoid 403 blocks from containerised requests |
+| **Structured fields** | DLQ warning includes Loaded / Rejected / Rejection Rate %; failure alert includes exit code |
+
+### Usage
+
+```bash
+# Set the webhook URL in .env
+PIPELINE_WEBHOOK_URL=https://discord.com/api/webhooks/...
+
+# Alerts fire automatically during pipeline execution
+python scripts/orchestrate.py --profile small
+```
+
+---
+
+## 12. Layer 7 — Data Governance & Lineage
+
+**Mechanism:** `dbt docs generate` (step 6 in the orchestrator) + `make docs` (local dev)
+
+The final automation step produces a browsable **data catalog** and **interactive lineage graph** that documents every model, column, test, and dependency in the dbt DAG.
+
+### How It Works
+
+1. **Orchestrator Step 6** — after all pipeline steps succeed, the orchestrator runs `dbt docs generate` inside the isolated `.venv-dbt` environment
+2. **`make docs`** — a Makefile shortcut that launches the local web server for any contributor to inspect the catalog
+
+```bash
+# Generate docs (automatic at end of pipeline)
+python scripts/orchestrate.py
+
+# View the metadata portal in a browser
+make docs
+# Opens at: http://localhost:8080
+```
+
+### What the Catalog Shows
+
+| Feature | Description |
+|---------|-------------|
+| **Model catalogue** | All 7 dbt models with column-level types, descriptions, and materialisation |
+| **Data lineage** | Interactive DAG showing `ref()` and `source()` dependencies across staging → intermediate → marts |
+| **Test results** | 48 data-quality tests with pass/fail status per model |
+| **Macro documentation** | Documented Jinja macros (`cents_to_dollars`, override schema) |
+| **Exposures** | Dashboard and Excel export registered as downstream consumers |
+
+### Lifecycle
+
+```
+┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│ Pipeline run │ ──> │ dbt docs generate│ ──> │ catalog.json +   │
+│ (step 1-5)   │     │ (step 6, .venv-  │     │ manifest.json    │
+│              │     │  dbt)            │     │ (in dbt/target/) │
+└──────────────┘     └──────────────────┘     └──────────────────┘
+                                                      │
+                                               ┌──────┴──────┐
+                                               │ make docs   │
+                                               │ (dbt docs   │
+                                               │  serve)     │
+                                               │ port 8080   │
+                                               └─────────────┘
+```
+
+---
+
+## 13. Step-by-Step Execution Sequence
 
 > Use this checklist when cloning the repo onto a **fresh machine**. Run commands in order.
 
@@ -600,40 +719,65 @@ make setup-dbt
 make run
 ```
 
-### Full Pipeline (Single Command)
+### Full Pipeline (Single Unified Command)
 
 ```bash
-# 6. Run everything — generate, load, transform, test, export
+# 6. Run everything — generate, load, transform, test, export, docs
 make pipeline
-# OR: .venv\Scripts\python scripts\orchestrate.py
+# OR directly:
+.venv\Scripts\python scripts\orchestrate.py
 
-# With a specific profile:
+# With a specific scale profile:
 .venv\Scripts\python scripts\orchestrate.py --profile small
+
+# The orchestrator runs all 6 steps automatically:
+#   [1] Generate Data      (.venv)
+#   [2] Load PostgreSQL    (.venv)
+#   [3] dbt Run            (.venv-dbt)
+#   [4] dbt Test           (.venv-dbt)
+#   [5] Excel Export       (.venv)
+#   [6] dbt Docs Generate  (.venv-dbt)
 ```
 
-### Step-by-Step (Manual)
+### View the Metadata Catalog
 
 ```bash
-# 6. Generate synthetic data
+# 7. Launch the interactive dbt docs portal in your browser
+make docs
+# Opens at: http://localhost:8080
+# Shows model catalogue, lineage graph, test results, and macros
+```
+
+### Step-by-Step (Manual — for Debugging)
+
+```bash
+# 6a. Generate synthetic data
 make generate-data
 # Options: --profile small | medium | large
 
-# 7. Load CSVs into PostgreSQL raw schema
+# 6b. Load CSVs into PostgreSQL raw schema
 make load-data
 
-# 8. Run dbt transformations (staging  intermediate  marts)
+# 6c. Run dbt transformations (staging → intermediate → marts)
 make dbt-run
 
-# 9. Run dbt data quality tests
+# 6d. Run dbt data quality tests
 make dbt-test
 
-# 10. Export styled Excel workbook
+# 6e. Export styled Excel workbook
 make export
 # Saves to: outputs/retail_analytics_*.xlsx
 
-# 11. Launch interactive dashboard
+# 6f. Generate dbt docs
+cd dbt && ..\.venv-dbt\Scripts\dbt docs generate
+
+# 7. Launch interactive dashboard
 make dashboard
 # Opens at: http://localhost:8501
+
+# 8. Launch dbt metadata portal
+make docs
+# Opens at: http://localhost:8080
 ```
 
 ### Validation

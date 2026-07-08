@@ -5,7 +5,7 @@
 # Type `make help` to see all available commands.
 # =============================================================================
 
-.PHONY: help setup setup-dbt run stop clean test lint format status export dashboard pipeline
+.PHONY: help setup setup-dbt run stop clean test lint format status export dashboard pipeline docs
 
 help:  # Print available commands with descriptions
 	@echo "RetailFlow Pipeline — Available Commands"
@@ -16,15 +16,16 @@ help:  # Print available commands with descriptions
 	@echo "  make stop           Stop all Docker services"
 	@echo "  make generate-data  Run the fake data generation script"
 	@echo "  make load-data      Load generated CSV data into PostgreSQL raw schema"
-  @echo "  make setup-dbt      Create isolated venv for dbt (avoids mashumaro conflicts)"
-  @echo "  make dbt-run        Execute all dbt models (staging → intermediate → marts)"
-  @echo "  make dbt-test       Run dbt data tests on all models"
+	@echo "  make setup-dbt      Create isolated venv for dbt (avoids mashumaro conflicts)"
+	@echo "  make dbt-run        Execute all dbt models (staging → intermediate → marts)"
+	@echo "  make dbt-test       Run dbt data tests on all models"
 	@echo "  make sql-analyze    Run all 4 analytics queries against the warehouse"
-  @echo "  make test           Run pytest unit tests"
-  @echo "  make status         Run end-to-end pipeline health check"
-  @echo "  make export         Export analytics to styled Excel workbook"
-  @echo "  make pipeline       Run full pipeline end-to-end via orchestrator"
-  @echo "  make dashboard      Launch the Streamlit analytics dashboard"
+	@echo "  make test           Run pytest unit tests"
+	@echo "  make status         Run end-to-end pipeline health check"
+	@echo "  make export         Export analytics to styled Excel workbook"
+	@echo "  make pipeline       Run full pipeline end-to-end via orchestrator"
+	@echo "  make dashboard      Launch the Streamlit analytics dashboard"
+	@echo "  make docs           Launch the dbt docs metadata portal in browser (run pipeline first)"
 	@echo "  make lint           Run flake8 linting on all Python files"
 	@echo "  make format         Auto-format Python code with black"
 	@echo "  make clean          Remove generated data, Python cache, and Docker volumes"
@@ -113,6 +114,14 @@ pipeline:  # Run the full pipeline end-to-end via the orchestrator
 dashboard:  # Launch the Streamlit analytics dashboard
 	@echo ">> Starting Streamlit dashboard..."
 	@.venv\Scripts\streamlit run src\dashboard\app.py
+
+docs:  # Generate dbt docs artifacts and launch the metadata portal in a browser
+	@echo ">> Compiling dbt project..."
+	@cd dbt && ..\.venv-dbt\Scripts\dbt compile
+	@echo ">> Generating documentation catalog..."
+	@cd dbt && ..\.venv-dbt\Scripts\dbt docs generate
+	@echo ">> Starting dbt docs server at http://localhost:8080..."
+	@cd dbt && ..\.venv-dbt\Scripts\dbt docs serve
 
 test:  # Run pytest unit tests
 	@echo ">> Running unit tests..."

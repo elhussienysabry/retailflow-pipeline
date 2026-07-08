@@ -628,31 +628,43 @@ The dashboard uses Streamlit's built-in caching (`@st.cache_data`) so it only qu
 
 The project includes a centralized orchestrator at `scripts/orchestrate.py` that runs the full pipeline as a single command, managing virtual environment switching automatically.
 
-### Pipeline DAG
+### Pipeline DAG (6 Steps)
 
 ```
-[1] Generate Data ──> [2] Load PostgreSQL ──> [3] dbt Run ──> [4] dbt Test ──> [5] Excel Export
+[1] Generate Data  ──> [2] Load PostgreSQL  ──> [3] dbt Run  ──> [4] dbt Test  ──> [5] Excel Export  ──> [6] dbt Docs
+
+  (.venv)                (.venv)               (.venv-dbt)       (.venv-dbt)        (.venv)             (.venv-dbt)
 ```
 
 Each step runs in its correct virtual environment:
 - Steps 1, 2, 5 → `.venv\Scripts\python.exe`
-- Steps 3, 4 → `.venv-dbt\Scripts\dbt.exe`
+- Steps 3, 4, 6 → `.venv-dbt\Scripts\dbt.exe`
 
 ### Circuit Breaker
 
 If any step returns a non-zero exit code, the orchestrator logs a critical error, halts immediately, and exits with code 1. Subsequent steps are never executed.
 
+### Alerting Hooks
+
+The orchestrator integrates with `scripts/alerts.py` to dispatch live notifications at key states:
+- **Warning** — ingestion phase finishes with DLQ rejected rows > 0
+- **Critical** — dbt tests fail (circuit breaker fires)
+- **Success** — all 6 steps complete, with total duration summary
+
 ### Usage
 
 ```bash
-# Run full pipeline with default medium profile
+# Single unified command (default medium profile)
 python scripts/orchestrate.py
 
-# Run with a specific scale profile
+# Fast testing with small profile
 python scripts/orchestrate.py --profile small
 
 # Via Make
 make pipeline
+
+# View the dbt metadata catalog (after pipeline)
+make docs
 ```
 
 The orchestrator outputs clear visual boundaries with timestamps, step durations, and a final summary showing total runtime.
@@ -853,12 +865,57 @@ Discord alerts use embedded messages with a colour bar matching the status:
 }
 ```
 
-
 ![RetailFlow Discord](images/Discord.png)
 
 ---
 
-## 19. Glossary
+## 19. Data Governance & Lineage
+
+The pipeline's final automation step (Step 6) generates an interactive **dbt documentation site** — a browsable catalog of every model, column, test, and dependency in the transformation layer.
+
+### How It Works
+
+- **Automatic generation** — after the first 5 pipeline steps succeed, the orchestrator runs `dbt docs generate` (Step 6) inside `.venv-dbt`, producing `catalog.json` and `manifest.json` in `dbt/target/`
+- **Interactive viewer** — the `make docs` command launches a local web server on port 8080
+- **No extra setup** — the dbt environment is already isolated and ready; the orchestrator switches to `.venv-dbt\Scripts\dbt.exe` automatically
+
+### View the Catalog
+
+```bash
+# 1. Run the full pipeline (Step 6 generates docs automatically)
+python scripts/orchestrate.py --profile small
+
+# 2. Launch the metadata portal
+make docs
+# Opens at: http://localhost:8080
+```
+![RetailFlow Docs](images/dbt.png)
+![RetailFlow Docss](images/dbtdocs.png)
+
+
+
+
+### What's Inside
+
+| Feature | What You See |
+|---------|-------------|
+| **Model catalogue** | All 7 dbt models with column types, descriptions, and materialisation strategy |
+| **Lineage graph** | Interactive DAG showing `ref()` and `source()` dependencies across all layers |
+| **Test dashboard** | 48 data-quality tests with pass/fail status per model |
+| **Macro docs** | Documented Jinja macros (`cents_to_dollars`, schema override) |
+| **Exposures** | Downstream consumers: the Streamlit dashboard and Excel exporter |
+
+### Lifecycle Diagram
+
+```
+Pipeline ──> dbt docs generate ──> catalog.json ──> make docs ──> Browser
+(steps 1-5)   (Step 6, .venv-dbt)   manifest.json   (dbt docs   (localhost:8080)
+                                                      serve)
+```
+
+---
+
+## 20. Glossary
 
 | Term | Simple Definition |
 |------|-------------------|
