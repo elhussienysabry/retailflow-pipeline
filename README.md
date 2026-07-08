@@ -792,7 +792,70 @@ This creates a web UI showing how data flows through your models — who depends
 
 ---
 
-## 18. Glossary
+## 18. Pipeline Alerts & Notifications
+
+The pipeline can send real-time alerts to **Discord** (or Slack) via webhooks when key events happen — ingestion warnings, dbt test failures, and pipeline completion status.
+
+### 18.1 How It Works
+
+- `scripts/alerts.py` provides a reusable `send_pipeline_alert()` function
+- `scripts/orchestrate.py` hooks into three pipeline stages:
+  - **Ingestion** — warns if DLQ has rejected rows (shows loaded/rejected/rejection-rate %)
+  - **dbt test** — critical alert if dbt tests fail (`💥 Pipeline Broken: ...`)
+  - **Completion** — success recap alert when the full pipeline finishes
+
+### 18.2 Setup
+
+1. **Create a Discord webhook:**
+   - Server Settings → Integrations → Webhooks → New Webhook
+   - Copy the webhook URL
+2. **Set the environment variable:**
+   ```bash
+   PIPELINE_WEBHOOK_URL=https://discord.com/api/webhooks/...
+   ```
+   Add it to `.env` (and `.env.example`) in the project root.
+3. **Restart containers** so the new variable is picked up:
+   ```bash
+   docker compose down
+   docker compose up -d
+   ```
+
+### 18.3 Alert Types
+
+| Status | Colour | Trigger |
+|--------|--------|---------|
+| `success` | Green | Pipeline completes all steps successfully |
+| `warning` | Amber | Ingestion finishes with DLQ rejects > 0 |
+| `critical` | Red | dbt tests fail |
+
+### 18.4 Graceful Fallback
+
+If `PIPELINE_WEBHOOK_URL` is not set or empty, the pipeline runs normally and logs:
+```
+Webhook not configured, skipping live alert.
+```
+No error is raised — alerts are purely optional.
+
+### 18.5 Alert Payload Example
+
+Discord alerts use embedded messages with a colour bar matching the status:
+
+```json
+{
+  "embeds": [{
+    "title": "💥 Pipeline Broken: dbt test",
+    "color": 15548997,
+    "fields": [
+      {"name": "Stage", "value": "dbt-test", "inline": true},
+      {"name": "Error", "value": "dbt exited with code 1", "inline": true}
+    ]
+  }]
+}
+```
+
+---
+
+## 19. Glossary
 
 | Term | Simple Definition |
 |------|-------------------|
