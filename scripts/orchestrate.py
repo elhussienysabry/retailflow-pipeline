@@ -14,6 +14,7 @@ If any step fails, the pipeline halts immediately (circuit breaker).
 import argparse
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -42,13 +43,29 @@ class CommandResult(NamedTuple):
 
 
 def _py_exe() -> str:
-    """Return the path to the main .venv Python executable."""
-    return str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe")
+    """Return the path to the Python executable.
+
+    On Windows: use the project-local .venv.
+    On Linux (container): use the system Python (``sys.executable``).
+    """
+    if sys.platform == "win32":
+        return str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe")
+    return sys.executable
 
 
 def _dbt_exe() -> str:
-    """Return the path to the isolated dbt executable."""
-    return str(PROJECT_ROOT / ".venv-dbt" / "Scripts" / "dbt.exe")
+    """Return the path to the dbt executable.
+
+    Resolution order:
+        1. ``DBT_EXECUTABLE`` env var (for container override).
+        2. Platform-relative path under ``.venv-dbt/``.
+    """
+    env_dbt = os.getenv("DBT_EXECUTABLE")
+    if env_dbt:
+        return env_dbt
+    if sys.platform == "win32":
+        return str(PROJECT_ROOT / ".venv-dbt" / "Scripts" / "dbt.exe")
+    return "dbt"
 
 
 def _step_box(num: int, total: int, name: str) -> str:
