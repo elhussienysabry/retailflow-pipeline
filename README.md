@@ -865,6 +865,8 @@ Discord alerts use embedded messages with a colour bar matching the status:
 }
 ```
 
+![RetailFlow Discord](images/Discord.png)
+
 ---
 
 ## 19. Data Governance & Lineage
@@ -887,6 +889,11 @@ python scripts/orchestrate.py --profile small
 make docs
 # Opens at: http://localhost:8080
 ```
+![RetailFlow Docs](images/dbt.png)
+![RetailFlow Docss](images/dbtdocs.png)
+
+
+
 
 ### What's Inside
 
