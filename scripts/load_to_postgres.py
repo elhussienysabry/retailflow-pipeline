@@ -19,6 +19,7 @@ Environment variables (from .env):
     POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -156,6 +157,38 @@ def _validate_orders(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 
 # ---------------------------------------------------------------------------
+# PII Anonymization (GDPR / CCPA compliance)
+# ---------------------------------------------------------------------------
+
+_PII_COLUMNS = ("first_name", "last_name", "email")
+
+
+def _anonymize_pii(df: pd.DataFrame) -> pd.DataFrame:
+    """SHA-256 hash PII columns in-place for GDPR/CCPA compliance.
+
+    For each PII column, nulls are preserved as nulls; non-null values are
+    stripped, lowercased, and replaced with their hex digest.
+
+    Args:
+        df: Customer DataFrame with PII columns.
+
+    Returns:
+        The same DataFrame with PII columns hashed.
+    """
+    for col in _PII_COLUMNS:
+        if col not in df.columns:
+            continue
+        mask = df[col].notna()
+        df.loc[mask, col] = df.loc[mask, col].apply(
+            lambda v: hashlib.sha256(
+                v.strip().lower().encode("utf-8")
+            ).hexdigest()
+        )
+    logger.info("PII columns anonymised: %s", ", ".join(_PII_COLUMNS))
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Dead Letter Queue
 # ---------------------------------------------------------------------------
 
@@ -288,6 +321,10 @@ def load_csv_to_table(
         )
 
         if not clean_chunk.empty:
+            # Anonymise PII for customer data before persisting.
+            if entity_name == "customer":
+                _anonymize_pii(clean_chunk)
+
             clean_chunk.to_sql(
                 table_name.split(".")[1],
                 engine,

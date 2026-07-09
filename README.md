@@ -16,9 +16,10 @@ To answer these questions, you need to:
 
 1. **Ingest** raw data from multiple sources (CSV files simulating an e-commerce platform)
 2. **Clean and validate** the data (remove duplicates, fix types, check quality)
-3. **Load** it into a data warehouse (PostgreSQL)
-4. **Transform** it into analysis-ready tables using dbt (staging → intermediate → marts)
-5. **Run analytics queries** to answer business questions
+3. **Anonymize PII** — `first_name`, `last_name`, and `email` are SHA-256 hashed before storage (GDPR / CCPA compliant)
+4. **Load** it into a data warehouse (PostgreSQL)
+5. **Transform** it into analysis-ready tables using dbt (staging → intermediate → marts)
+6. **Run analytics queries** to answer business questions
 
 This project teaches the **modern data stack** — tools and patterns used at real companies like Airbnb, Spotify, and GitLab.
 

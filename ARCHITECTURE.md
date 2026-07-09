@@ -216,6 +216,13 @@ retailflow-pipeline/
 - The pipeline continues normally; only clean rows reach PostgreSQL
 - The orchestrator captures and logs the loaded vs. rejected count at the end of the ingestion step
 
+**PII Anonymization (GDPR / CCPA Compliance):**
+- Before writing customer rows to the database, the `first_name`, `last_name`, and `email` columns are SHA-256 hashed for privacy compliance
+- The hashing is deterministic: each value is stripped of whitespace, lowercased, then hashed — so the same real name always maps to the same hash (useful for joins without exposing PII)
+- Null values are preserved as-is; the pipeline never crashes on missing data
+- The transformation happens in `_anonymize_pii()` right after validation and before the SQL insert — only clean customer rows are anonymized
+- The raw CSV files on disk remain unmodified; only the database copy is obfuscated
+
 ---
 
 ## 4. Layer 2 — PostgreSQL Warehouse (Storage)
