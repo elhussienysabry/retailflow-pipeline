@@ -43,12 +43,13 @@ STEP_FAIL = "  FAIL  {name} FAILED (exit code {code})"
 # Graceful import: try the package path first, then the sibling path.
 _ALERTS_AVAILABLE = False
 send_pipeline_alert = None  # type: ignore
+send_dbt_test_alert = None  # type: ignore
 try:
-    from scripts.alerts import send_pipeline_alert  # noqa: E402
+    from scripts.alerts import send_pipeline_alert, send_dbt_test_alert  # noqa: E402
     _ALERTS_AVAILABLE = True
 except ImportError:
     try:
-        from alerts import send_pipeline_alert  # noqa: E402, F811
+        from alerts import send_pipeline_alert, send_dbt_test_alert  # noqa: E402, F811
         _ALERTS_AVAILABLE = True
     except ImportError:
         pass
@@ -215,6 +216,11 @@ def _send_step_failure_alert(step_name: str, rc: int) -> None:
         return
 
     if step_name == "dbt Test":
+        # Send a rich alert that lists every failed/errored test from
+        # run_results.json, then fall back to the generic alert.
+        run_results = PROJECT_ROOT / "dbt" / "target" / "run_results.json"
+        if send_dbt_test_alert and run_results.exists():
+            send_dbt_test_alert(str(run_results), rc)
         send_pipeline_alert(
             status="critical",
             stage="dbt-test",

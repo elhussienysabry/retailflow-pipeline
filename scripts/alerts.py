@@ -115,6 +115,150 @@ def _build_discord_payload(
     return {"embeds": [embed]}
 
 
+# ── dbt test result alert ───────────────────────────────────────────────
+
+
+def parse_dbt_test_results(
+    run_results_path: str,
+) -> Dict[str, Any]:
+    """Read ``run_results.json`` and return a summary of failed/errored tests.
+
+    Args:
+        run_results_path: Absolute path to ``dbt/target/run_results.json``.
+
+    Returns:
+        Dict with keys:
+            - ``total`` — total test count.
+            - ``failed`` — list of dicts (unique_id, status, execution_time, message).
+            - ``errored`` — list of dicts (unique_id, status, execution_time, message).
+    """
+    try:
+        with open(run_results_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        logger.warning("Could not read run_results.json: %s", exc)
+        return {"total": 0, "failed": [], "errored": []}
+
+    results = data.get("results", [])
+    failed: list = []
+    errored: list = []
+
+    for r in results:
+        uid = r.get("unique_id", "unknown")
+        status = r.get("status", "")
+        if status in ("fail", "error"):
+            entry = {
+                "unique_id": uid,
+                "status": status,
+                "execution_time": round(r.get("execution_time", 0), 3),
+                "message": r.get("message", ""),
+            }
+            if status == "fail":
+                failed.append(entry)
+            else:
+                errored.append(entry)
+
+    summary = {
+        "total": len(results),
+        "failed": failed,
+        "errored": errored,
+    }
+    logger.info(
+        "dbt test results: %d total, %d failed, %d errored",
+        summary["total"],
+        len(failed),
+        len(errored),
+    )
+    return summary
+
+
+def send_dbt_test_alert(
+    run_results_path: str,
+    exit_code: int,
+) -> bool:
+    """Send a rich alert for dbt data quality SLA breaches.
+
+    Parses ``run_results.json`` and builds a Discord embed / Slack attachment
+    listing every failed or errored test with its unique ID, status, and
+    execution time.
+
+    Args:
+        run_results_path: Absolute path to ``dbt/target/run_results.json``.
+        exit_code: The dbt process exit code (included in the alert).
+
+    Returns:
+        ``True`` if the alert was sent, ``False`` otherwise.
+    """
+    url = _get_webhook_url()
+    if not url:
+        return False
+
+    summary = parse_dbt_test_results(run_results_path)
+    total = summary["total"]
+    all_bad = summary["failed"] + summary["errored"]
+
+    if not all_bad:
+        logger.info("No dbt test failures to alert on.")
+        return False
+
+    stage = "dbt-test"
+    fields = [
+        {"name": "Stage", "value": stage, "inline": True},
+        {"name": "Exit Code", "value": str(exit_code), "inline": True},
+        {"name": "Tests Run", "value": str(total), "inline": True},
+        {"name": "Failed", "value": str(len(summary["failed"])), "inline": True},
+        {"name": "Errored", "value": str(len(summary["errored"])), "inline": True},
+    ]
+
+    # List up to 5 failed tests inline to keep the payload readable.
+    for t in all_bad[:5]:
+        uid_short = t["unique_id"].split(".")[-1]
+        fields.append({
+            "name": f"\u274C {t['status'].upper()} \u2014 {uid_short}",
+            "value": t["message"] or f"execution_time={t['execution_time']}s",
+            "inline": False,
+        })
+
+    if len(all_bad) > 5:
+        fields.append({
+            "name": "... and {0} more failure(s)".format(len(all_bad) - 5),
+            "value": "Check run_results.json for full details.",
+            "inline": False,
+        })
+
+    payload = (
+        _build_discord_payload("critical", stage, fields)
+        if _is_discord_webhook(url)
+        else _build_slack_payload("critical", stage, fields)
+    )
+
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+    }
+
+    try:
+        req = urllib.request.Request(
+            url, data=data, headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            logger.info(
+                "dbt test alert sent (%d failures, %d errors) \u2014 HTTP %d",
+                len(summary["failed"]),
+                len(summary["errored"]),
+                resp.status,
+            )
+        return True
+    except urllib.error.URLError as exc:
+        logger.error("Failed to send dbt test alert: %s", exc)
+        return False
+
+
 # ── Public API ──────────────────────────────────────────────────────────
 
 def send_pipeline_alert(
