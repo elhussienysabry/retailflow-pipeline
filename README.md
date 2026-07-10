@@ -90,6 +90,16 @@ This project teaches the **modern data stack** — tools and patterns used at re
 
 ---
 
+## 3.1 Technical Highlights
+
+| Capability | Implementation |
+|------------|----------------|
+| **Automated Platform Health Pre-Checks** | Before any data is moved, the orchestrator (`scripts/orchestrate.py`) validates that all 6 critical directories exist and the isolated dbt virtual environment is accessible. A missing component triggers a descriptive local error and halts immediately — no silent mid-pipeline failures. |
+| **Active SLA Notifications** | `scripts/alerts.py` dispatches colour-coded alerts to Discord (embeds) or Slack (Block Kit) at every pipeline milestone. Uses `requests.post()` with 15-second timeout; all HTTP errors are caught so a webhook failure never crashes the pipeline. Response body is logged on 4xx/5xx for debugging malformed payloads. |
+| **Self-Rendering Lineage Blueprint** | `scripts/generate_lineage.py` (Step 7) programmatically parses dbt's `manifest.json` via `networkx.DiGraph`, detects architectural layers by model name prefix (`stg_` / `int_` / `dim_` / `fct_`), and renders a high-resolution (200 DPI), colour-coded PNG at `docs/lineage/current_data_lineage.png` — a static asset that can be committed, reviewed, and compared across pipeline runs. |
+
+---
+
 ## 4. Prerequisites
 
 Install these tools **before** setting up the project:
@@ -631,16 +641,23 @@ The dashboard uses Streamlit's built-in caching (`@st.cache_data`) so it only qu
 
 The project includes a centralized orchestrator at `scripts/orchestrate.py` that runs the full pipeline as a single command, managing virtual environment switching automatically.
 
-### Pipeline DAG (6 Steps)
+### Pre-Flight Health Checks
+
+Before executing any step, the orchestrator validates structural readiness:
+- All 6 critical directories exist (`data/raw/`, `dbt/`, `dbt/models/`, `dbt/target/`, `scripts/`, `src/`)
+- The isolated dbt venv is accessible at `.venv-dbt/`
+- Descriptive error message + exit code 1 if any check fails — prevents silent mid-pipeline failures
+
+### Pipeline DAG (7 Steps)
 
 ```
-[1] Generate Data  ──> [2] Load PostgreSQL  ──> [3] dbt Run  ──> [4] dbt Test  ──> [5] Excel Export  ──> [6] dbt Docs
+[1] Generate Data  ──> [2] Load PostgreSQL  ──> [3] dbt Run  ──> [4] dbt Test  ──> [5] Excel Export  ──> [6] dbt Docs  ──> [7] Lineage Export
 
-  (.venv)                (.venv)               (.venv-dbt)       (.venv-dbt)        (.venv)             (.venv-dbt)
+  (.venv)                (.venv)               (.venv-dbt)       (.venv-dbt)        (.venv)             (.venv-dbt)           (.venv)
 ```
 
 Each step runs in its correct virtual environment:
-- Steps 1, 2, 5 → `.venv\Scripts\python.exe`
+- Steps 1, 2, 5, 7 → `.venv\Scripts\python.exe`
 - Steps 3, 4, 6 → `.venv-dbt\Scripts\dbt.exe`
 
 ### Circuit Breaker
@@ -649,10 +666,12 @@ If any step returns a non-zero exit code, the orchestrator logs a critical error
 
 ### Alerting Hooks
 
-The orchestrator integrates with `scripts/alerts.py` to dispatch live notifications at key states:
+The orchestrator integrates with `scripts/alerts.py` (powered by `requests.post()` with a 15-second timeout) to dispatch live notifications at key states:
 - **Warning** — ingestion phase finishes with DLQ rejected rows > 0
 - **Critical** — dbt tests fail (circuit breaker fires), with a **rich metadata payload** listing every failed/errored test (unique ID, status, execution time, and database message) parsed from `run_results.json`
-- **Success** — all 6 steps complete, with total duration summary
+- **Success** — all 7 steps complete, with total duration summary
+
+Slack payloads use **Block Kit** (header, context, section fields, footer) and Discord payloads use **embeds** with a colour bar. Auto-detection by URL domain. All HTTP exceptions caught safely — a webhook failure never crashes the pipeline.
 
 ### Usage
 
@@ -809,11 +828,15 @@ This creates a web UI showing how data flows through your models — who depends
 
 ## 18. Pipeline Alerts & Notifications
 
-The pipeline can send real-time alerts to **Discord** (or Slack) via webhooks when key events happen — ingestion warnings, dbt test failures, and pipeline completion status.
+The pipeline can send real-time alerts to **Discord** (Block Kit embeds) or **Slack** (Block Kit) via webhooks when key events happen — ingestion warnings, dbt test failures, and pipeline completion status.
 
 ### 18.1 How It Works
 
-- `scripts/alerts.py` provides a reusable `send_pipeline_alert()` function
+- `scripts/alerts.py` provides `send_pipeline_alert()` and `send_dbt_test_alert()` — both use the `requests` library for HTTP transport
+- Payloads are auto-detected: Discord webhook URLs get embed format; Slack webhook URLs get **Block Kit** (header, context, divider, section fields, footer)
+- Every POST is wrapped in a safe try/except that catches `ConnectionError`, `Timeout`, and `RequestException` — **a webhook failure never crashes the pipeline**
+- On HTTP 4xx/5xx, the first 500 characters of the response body are logged for debugging
+- Built-in 15-second request timeout
 - `scripts/orchestrate.py` hooks into three pipeline stages:
   - **Ingestion** — warns if DLQ has rejected rows (shows loaded/rejected/rejection-rate %)
   - **dbt test** — critical alert if dbt tests fail (`💥 Pipeline Broken: ...`)

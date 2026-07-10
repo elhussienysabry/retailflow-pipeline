@@ -31,6 +31,71 @@ logger = logging.getLogger("orchestrate")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# ── Pre-flight health check ────────────────────────────────────────────
+
+_REQUIRED_DIRS = [
+    "data/raw",
+    "dbt",
+    "dbt/models",
+    "dbt/target",
+    "scripts",
+    "src",
+]
+
+_DBT_VENV_DIR = PROJECT_ROOT / ".venv-dbt"
+
+
+def _check_dbt_venv() -> None:
+    """Verify the isolated dbt virtual environment is accessible."""
+    marker = (
+        _DBT_VENV_DIR / "Scripts" / "dbt.exe"
+        if sys.platform == "win32"
+        else _DBT_VENV_DIR / "bin" / "dbt"
+    )
+    if not marker.exists():
+        msg = (
+            f"dbt virtual environment not found at {_DBT_VENV_DIR}.\n"
+            "  Run `make setup-dbt` to create it."
+        )
+        logger.critical(msg)
+        print("\n  [PRE-FLIGHT FAIL] " + msg + "\n")
+        sys.exit(1)
+    logger.info("Pre-flight OK — dbt venv found at %s", _DBT_VENV_DIR)
+
+
+def _run_preflight_checks() -> None:
+    """Validate structural readiness before executing any pipeline step.
+
+    Exits with a descriptive message if any core component is missing.
+    """
+    missing = []
+    for rel in _REQUIRED_DIRS:
+        if not (PROJECT_ROOT / rel).is_dir():
+            missing.append(rel)
+
+    if missing:
+        msg = (
+            "The following required directories are missing:\n"
+        )
+        for d in missing:
+            msg += f"    - {d}/\n"
+        msg += (
+            "  Ensure the project structure is intact.\n"
+            "  Run `git checkout -- .` or re-clone the repository."
+        )
+        logger.critical("Pre-flight check failed — %d missing dir(s)", len(missing))
+        print("\n  [PRE-FLIGHT FAIL] " + msg + "\n")
+        sys.exit(1)
+
+    logger.info(
+        "Pre-flight OK — %d/%d directories present",
+        len(_REQUIRED_DIRS) - len(missing),
+        len(_REQUIRED_DIRS),
+    )
+
+    _check_dbt_venv()
+
+
 STEP_HEADER = """
 {sep}
   {emoji}  STEP {num}/{total} — {name}
@@ -97,7 +162,7 @@ def _dbt_exe() -> str:
 def _step_box(num: int, total: int, name: str) -> str:
     width = 68
     sep = "-" * width
-    icons = ["[DATA]", "[LOAD]", "[DBT]", "[TEST]", "[EXCEL]", "[DOCS]"]
+    icons = ["[DATA]", "[LOAD]", "[DBT]", "[TEST]", "[EXCEL]", "[DOCS]", "[LINEAGE]"]
     icon = icons[num - 1] if num <= len(icons) else "[...]"
     return STEP_HEADER.format(
         sep=sep, emoji=icon, num=num, total=total, name=name
@@ -355,6 +420,15 @@ def step_dbt_docs_generate() -> int:
     return result.returncode
 
 
+def step_generate_lineage() -> int:
+    """Step 7: Render a dynamic lineage blueprint from manifest.json."""
+    result = _run_command(
+        [_py_exe(), str(PROJECT_ROOT / "scripts" / "generate_lineage.py")],
+        label="generate-lineage",
+    )
+    return result.returncode
+
+
 PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("Generate Data", step_generate_data),
     ("Load to PostgreSQL", step_load_to_postgres),
@@ -362,6 +436,7 @@ PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("dbt Test", step_dbt_test),
     ("Excel Export", step_excel_export),
     ("dbt Docs Generate", step_dbt_docs_generate),
+    ("Lineage Graph Export", step_generate_lineage),
 ]
 
 
@@ -395,6 +470,8 @@ def main() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    _run_preflight_checks()
 
     pipeline_start = time.monotonic()
 
