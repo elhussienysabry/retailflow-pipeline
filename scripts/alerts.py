@@ -5,8 +5,10 @@ RetailFlow Pipeline — Alerting & Notification Utility
 Sends pipeline state alerts to a Slack or Discord webhook.
 Reads ``PIPELINE_WEBHOOK_URL`` from the environment.
 
-Supports both Discord embed format and Slack-compatible JSON payloads
-(webhook URL is auto-detected by pattern).
+Supports both Discord embed format and Slack Block Kit payloads
+(webhook URL is auto-detected by pattern).  Uses the ``requests``
+library for robust HTTP transport with proper timeouts and error
+handling.
 
 Usage:
     from scripts.alerts import send_pipeline_alert
@@ -21,16 +23,16 @@ Usage:
 import json
 import logging
 import os
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
 # ── Colour palette ──────────────────────────────────────────────────────
-# Discord embed colours (hex → decimal). Slack uses hex strings via
-# ``attachments[].color`` or the ``"#xxxxxx"`` string in text fallback.
+# Discord embed colours (hex → decimal).  Slack uses hex strings in
+# the Block Kit ``"color"`` field of section blocks.
 _COLORS: Dict[str, int] = {
     "success": 0x36A64F,
     "warning": 0xFFA500,
@@ -49,6 +51,8 @@ _STATUS_LABEL: Dict[str, str] = {
     "critical": "Critical",
 }
 
+_REQUEST_TIMEOUT = 15  # seconds
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -65,54 +69,197 @@ def _is_discord_webhook(url: str) -> bool:
     return "discord.com" in url or "discordapp.com" in url
 
 
-def _field_block(name: str, value: str, inline: bool = True) -> Dict[str, Any]:
-    """Build a single embed field (Discord) or Slack attachment field."""
-    return {"name": name, "value": value, "inline": inline}
+def _build_fields_list(
+    status: str, stage: str, details: Optional[Dict[str, Any]] = None
+) -> list:
+    """Build a shared list of field dicts used by both Slack and Discord."""
+    fields: list = []
+    if stage:
+        fields.append({"name": "Stage", "value": stage, "inline": True})
+    if details:
+        for key, value in details.items():
+            fields.append({"name": key, "value": str(value), "inline": True})
+    return fields
 
 
-# ── Payload builders ────────────────────────────────────────────────────
+# ── Slack Block Kit payload builder ─────────────────────────────────────
+
 
 def _build_slack_payload(
-    status: str, stage: str, fields: list
+    status: str, stage: str, details: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """Slack-compatible payload using the attachment pattern.
+    """Modern Slack Block Kit payload.
 
-    Falls back to a simple ``text`` field so the message is always visible
-    even if the blocks aren't rendered.
+    Uses a header block, context block, and section blocks with
+    an optional side ``color`` indicator via ``"type": "section"``
+    accessory fields.
     """
     emoji = _STATUS_EMOJI.get(status, "")
     label = _STATUS_LABEL.get(status, "Unknown")
     color_hex = "#{:06x}".format(_COLORS.get(status, 0x808080))
 
-    text = f"{emoji}  RetailFlow Pipeline — {label}  |  Stage: {stage}"
+    blocks: list[Dict[str, Any]] = []
 
-    attachment = {
-        "color": color_hex,
-        "title": text,
-        "fields": fields,
-        "footer": "RetailFlow Pipeline",
-        "ts": int(datetime.now(timezone.utc).timestamp()),
+    # ── Header ──────────────────────────────────────────────────────
+    blocks.append({
+        "type": "header",
+        "text": {
+            "type": "plain_text",
+            "text": f"{emoji}  RetailFlow Pipeline — {label}",
+            "emoji": True,
+        },
+    })
+
+    # ── Context (stage & timestamp) ──────────────────────────────────
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": (
+                    f"*Stage:* {stage}   |   *Timestamp:* "
+                    f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                ),
+            },
+        ],
+    })
+
+    # ── Divider ─────────────────────────────────────────────────────
+    blocks.append({"type": "divider"})
+
+    # ── Detail fields ────────────────────────────────────────────────
+    if details:
+        field_chunks: list[Dict[str, str]] = []
+        for key, value in details.items():
+            field_chunks.append({
+                "type": "mrkdwn",
+                "text": f"*{key}:*\n{value}",
+            })
+        # Slack blocks support up to 10 fields per section.
+        for i in range(0, len(field_chunks), 10):
+            chunk = field_chunks[i:i + 10]
+            blocks.append({
+                "type": "section",
+                "fields": chunk,
+            })
+
+    # ── Footer ──────────────────────────────────────────────────────
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": (
+                    "RetailFlow Pipeline  •  "
+                    "<https://github.com/elhussienysabry/retailflow-pipeline|GitHub>"
+                ),
+            },
+        ],
+    })
+
+    return {
+        "text": f"{emoji} RetailFlow Pipeline — {label} — Stage: {stage}",
+        "attachments": [
+            {
+                "color": color_hex,
+                "blocks": blocks,
+            }
+        ],
     }
 
-    return {"text": text, "attachments": [attachment]}
+
+# ── Discord embed payload builder ───────────────────────────────────────
 
 
 def _build_discord_payload(
-    status: str, stage: str, fields: list
+    status: str, stage: str, details: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """Discord embed payload."""
+    """Discord embed payload with modern markdown styling."""
     emoji = _STATUS_EMOJI.get(status, "")
     label = _STATUS_LABEL.get(status, "Unknown")
     color = _COLORS.get(status, 0x808080)
+
+    fields = _build_fields_list(status, stage, details)
 
     embed = {
         "title": f"{emoji}  RetailFlow Pipeline — {label}",
         "color": color,
         "fields": fields,
+        "footer": {"text": "RetailFlow Pipeline"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     return {"embeds": [embed]}
+
+
+# ── Core HTTP sender ────────────────────────────────────────────────────
+
+
+def _post_webhook(
+    payload: Dict[str, Any],
+    url: str,
+    label: str = "alert",
+) -> bool:
+    """POST a JSON payload to a webhook URL with proper error handling.
+
+    Args:
+        payload:   The JSON-serialisable dict to send.
+        url:       The webhook endpoint.
+        label:     Human-readable label for log messages.
+
+    Returns:
+        ``True`` if the POST succeeded (HTTP 2xx), ``False`` otherwise.
+    """
+    logger.debug("Sending %s to %s", label, url)
+
+    try:
+        resp = requests.post(
+            url,
+            json=payload,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+            },
+            timeout=_REQUEST_TIMEOUT,
+        )
+    except requests.ConnectionError as exc:
+        logger.error(
+            "Failed to send %s — connection error: %s", label, exc
+        )
+        return False
+    except requests.Timeout as exc:
+        logger.error(
+            "Failed to send %s — request timed out (%ss): %s",
+            label,
+            _REQUEST_TIMEOUT,
+            exc,
+        )
+        return False
+    except requests.RequestException as exc:
+        logger.error(
+            "Failed to send %s — unexpected request error: %s", label, exc
+        )
+        return False
+
+    # Log the response body for debugging webhook failures.
+    if not resp.ok:
+        logger.error(
+            "%s rejected — HTTP %s: %s",
+            label,
+            resp.status_code,
+            resp.text[:500],
+        )
+        return False
+
+    logger.info(
+        "%s delivered — HTTP %s",
+        label,
+        resp.status_code,
+    )
+    return True
 
 
 # ── dbt test result alert ───────────────────────────────────────────────
@@ -178,7 +325,7 @@ def send_dbt_test_alert(
 ) -> bool:
     """Send a rich alert for dbt data quality SLA breaches.
 
-    Parses ``run_results.json`` and builds a Discord embed / Slack attachment
+    Parses ``run_results.json`` and builds a Discord embed / Slack Block Kit
     listing every failed or errored test with its unique ID, status, and
     execution time.
 
@@ -201,65 +348,39 @@ def send_dbt_test_alert(
         logger.info("No dbt test failures to alert on.")
         return False
 
-    stage = "dbt-test"
-    fields = [
-        {"name": "Stage", "value": stage, "inline": True},
-        {"name": "Exit Code", "value": str(exit_code), "inline": True},
-        {"name": "Tests Run", "value": str(total), "inline": True},
-        {"name": "Failed", "value": str(len(summary["failed"])), "inline": True},
-        {"name": "Errored", "value": str(len(summary["errored"])), "inline": True},
-    ]
-
-    # List up to 5 failed tests inline to keep the payload readable.
-    for t in all_bad[:5]:
-        uid_short = t["unique_id"].split(".")[-1]
-        fields.append({
-            "name": f"\u274C {t['status'].upper()} \u2014 {uid_short}",
-            "value": t["message"] or f"execution_time={t['execution_time']}s",
-            "inline": False,
-        })
-
-    if len(all_bad) > 5:
-        fields.append({
-            "name": "... and {0} more failure(s)".format(len(all_bad) - 5),
-            "value": "Check run_results.json for full details.",
-            "inline": False,
-        })
-
-    payload = (
-        _build_discord_payload("critical", stage, fields)
-        if _is_discord_webhook(url)
-        else _build_slack_payload("critical", stage, fields)
-    )
-
-    data = json.dumps(payload).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
+    stage_label = "dbt-test"
+    details: Dict[str, Any] = {
+        "Stage": stage_label,
+        "Exit Code": str(exit_code),
+        "Tests Run": str(total),
+        "Failed": str(len(summary["failed"])),
+        "Errored": str(len(summary["errored"])),
     }
 
-    try:
-        req = urllib.request.Request(
-            url, data=data, headers=headers, method="POST"
+    # List up to 5 failed tests inline.
+    for i, t in enumerate(all_bad[:5]):
+        uid_short = t["unique_id"].split(".")[-1]
+        details[f"\u274C {t['status'].upper()} \u2014 {uid_short}"] = (
+            t["message"] or f"execution_time={t['execution_time']}s"
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            logger.info(
-                "dbt test alert sent (%d failures, %d errors) \u2014 HTTP %d",
-                len(summary["failed"]),
-                len(summary["errored"]),
-                resp.status,
-            )
-        return True
-    except urllib.error.URLError as exc:
-        logger.error("Failed to send dbt test alert: %s", exc)
-        return False
+
+    if len(all_bad) > 5:
+        details["... and more"] = (
+            f"{len(all_bad) - 5} additional failure(s) \u2014 "
+            "check run_results.json for full details."
+        )
+
+    payload = (
+        _build_discord_payload("critical", stage_label, details)
+        if _is_discord_webhook(url)
+        else _build_slack_payload("critical", stage_label, details)
+    )
+
+    return _post_webhook(payload, url, label="dbt-test-alert")
 
 
 # ── Public API ──────────────────────────────────────────────────────────
+
 
 def send_pipeline_alert(
     status: str,
@@ -281,40 +402,10 @@ def send_pipeline_alert(
     if not url:
         return False
 
-    fields = [_field_block("Stage", stage)]
-
-    if details:
-        for key, value in details.items():
-            fields.append(_field_block(key, str(value)))
-
     payload = (
-        _build_discord_payload(status, stage, fields)
+        _build_discord_payload(status, stage, details)
         if _is_discord_webhook(url)
-        else _build_slack_payload(status, stage, fields)
+        else _build_slack_payload(status, stage, details)
     )
 
-    data = json.dumps(payload).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-    }
-
-    try:
-        req = urllib.request.Request(
-            url, data=data, headers=headers, method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            logger.info(
-                "Alert sent (status=%s, stage=%s) — HTTP %d",
-                status,
-                stage,
-                resp.status,
-            )
-        return True
-    except urllib.error.URLError as exc:
-        logger.error("Failed to send alert: %s", exc)
-        return False
+    return _post_webhook(payload, url, label=f"pipeline-alert/{stage}")

@@ -569,6 +569,17 @@ The `_dbt_exe()` and `_py_exe()` functions in `scripts/orchestrate.py` now detec
 | Windows (local) | `.venv\Scripts\python.exe` | `.venv-dbt\Scripts\dbt.exe` |
 | Linux (container) | `sys.executable` | `$DBT_EXECUTABLE` env var (→ `/opt/dbt-venv/bin/dbt`) |
 
+### Pre-Flight Health Checks
+
+Before executing any pipeline step, the orchestrator runs a programmatic validation block (`_run_preflight_checks()`) that confirms structural readiness:
+
+| Check | What it validates | Failure message |
+|-------|-------------------|-----------------|
+| **Critical directories** | `data/raw/`, `dbt/`, `dbt/models/`, `dbt/target/`, `scripts/`, `src/` | "The following required directories are missing: …" |
+| **dbt virtual environment** | `.venv-dbt/Scripts/dbt.exe` (Win) or `.venv-dbt/bin/dbt` (Linux) | "dbt virtual environment not found at … Run `make setup-dbt` to create it." |
+
+If any check fails, the orchestrator logs a `CRITICAL` message and exits with code 1 **before** any data is generated or loaded — preventing silent failures or confusing "module not found" errors mid-pipeline.
+
 ### Network Configuration
 
 Inside the Docker network, the database is reachable as `db` (the Compose service name). The `app` service receives `POSTGRES_HOST: db` via its `environment` block, overriding the `.env` default of `localhost`. All Python connection helpers (`get_engine()`) read from env vars at runtime, so they adapt automatically — no code changes needed.
@@ -670,13 +681,26 @@ The alerting engine provides real-time observability by dispatching colour-coded
 ### Architecture
 
 ```
-Pipeline Event ──> orchestrator ──> send_pipeline_alert()
+Pipeline Event ──> orchestrator ──> send_pipeline_alert() / send_dbt_test_alert()
                                           │
-                                    ┌─────┴─────┐
-                                    │           │
-                                    ▼           ▼
-                               Discord      Slack
-                               (embed)   (attachment)
+                                    ┌─────┴──────┐
+                                    │            │
+                                    ▼            ▼
+                               Discord       Slack
+                             (embeds)    (Block Kit)
+                                    │            │
+                                    └────┬───────┘
+                                         │
+                                    requests.post()
+                                    (timeout=15s,
+                                     response body
+                                     logged on failure)
+                                         │
+                                    ┌────┴────┐
+                                    │         │
+                                    ▼         ▼
+                               HTTP 2xx   HTTP 4xx/5xx
+                               (logged)   (logged + False)
 ```
 
 ### Alert Triggers
@@ -704,10 +728,15 @@ When dbt data quality tests fail, the orchestrator dispatches a **rich, metadata
 
 | Concern | Implementation |
 |---------|---------------|
+| **Transport** | `requests.post()` with 15-second timeout — more robust than `urllib.request` against intermittent network issues |
 | **Auto-detection** | URL pattern determines Discord vs Slack payload format |
 | **No dependency** | Graceful skip if `PIPELINE_WEBHOOK_URL` is unset (logs "Webhook not configured, skipping live alert.") |
 | **Colour coding** | Discord embeds use `color` field: `0x57F287` (green), `0xFEE75C` (amber), `0xED4245` (red) |
+| **Slack format** | Modern **Block Kit** payload (header, context, divider, section fields, footer) instead of the legacy `attachments` format |
+| **Discord format** | Standard embed with title, colour bar, fields, footer, and ISO-8601 timestamp |
 | **Cloudflare bypass** | Custom `User-Agent` header mimics a real browser to avoid 403 blocks from containerised requests |
+| **Error resilience** | All HTTP exceptions are caught (ConnectionError, Timeout, RequestException) — a webhook failure **never** crashes the pipeline |
+| **Response logging** | On HTTP 4xx/5xx, the first 500 chars of the response body are logged for debugging malformed payloads |
 | **Structured fields** | DLQ warning includes Loaded / Rejected / Rejection Rate %; failure alert includes exit code |
 | **Rich dbt failure payload** | `parse_dbt_test_results()` extracts per-test metadata from `run_results.json` — up to 5 individual failures are listed inline with their unique ID, status, and database message |
 
@@ -725,11 +754,15 @@ python scripts/orchestrate.py --profile small
 
 ## 12. Layer 7 — Data Governance & Lineage
 
-**Mechanism:** `dbt docs generate` (step 6 in the orchestrator) + `make docs` (local dev)
+**Mechanism:**
+- `dbt docs generate` (step 6 in the orchestrator) + `make docs` (local dev)
+- **`scripts/generate_lineage.py`** — a dynamic, programmatic lineage graph exporter (step 7 in the orchestrator)
 
-The final automation step produces a browsable **data catalog** and **interactive lineage graph** that documents every model, column, test, and dependency in the dbt DAG.
+The pipeline produces two complementary artifacts:
+1. An **interactive data catalog** (dbt docs) — browsable model catalogue, column-level metadata, interactive DAG, test dashboard
+2. A **static lineage blueprint** — a high-resolution PNG visualisation of the model dependency graph, colour-coded by architectural layer
 
-### How It Works
+### dbt Documentation Catalog
 
 1. **Orchestrator Step 6** — after all pipeline steps succeed, the orchestrator runs `dbt docs generate` inside the isolated `.venv-dbt` environment
 2. **`make docs`** — a Makefile shortcut that launches the local web server for any contributor to inspect the catalog
@@ -753,21 +786,72 @@ make docs
 | **Macro documentation** | Documented Jinja macros (`cents_to_dollars`, override schema) |
 | **Exposures** | Dashboard and Excel export registered as downstream consumers |
 
+### Dynamic Lineage Blueprint (Step 7)
+
+**Script:** `scripts/generate_lineage.py` — runs automatically as **orchestrator Step 7** after `dbt docs generate`.
+
+This module produces a **static, high-resolution PNG lineage graph** that visually documents how data flows through the transformation layers.
+
+#### How It Works
+
+1. **Parses** `dbt/target/manifest.json` — the JSON artifact produced by `dbt docs generate`
+2. **Filters** to `resource_type == "model"` nodes only (sources such as `raw.orders` are excluded, as they represent upstream raw data rather than transformations)
+3. **Detects layer** from model name prefix:
+   - `stg_*` → **Staging** (green `#2E8B57`)
+   - `int_*` → **Intermediate** (blue `#4169E1`)
+   - `dim_*` / `fct_*` → **Marts** (gold `#DAA520`)
+4. **Builds a `networkx.DiGraph`** — edges are added for every `ref()` dependency between models (edges from `source.*` references are skipped)
+5. **Computes a layered layout** — staging models on the left, intermediate in the centre, marts on the right — mirroring the left-to-right data flow of the architecture diagram
+6. **Renders** the graph with `matplotlib` at 200 DPI with:
+   - Colour-coded circular nodes with dark borders
+   - White bold labels with a dark stroke for readability
+   - Directed arrows (`-|>` style) showing dependency direction
+   - Layer annotations above each column
+   - Light grey background (#FAFAFA)
+
+#### Output
+
+```
+docs/lineage/current_data_lineage.png
+```
+
+Saved as a static asset that can be:
+- Committed to the repository for PR reviews
+- Embedded in documentation or runbooks
+- Compared across pipeline runs to detect structural drift
+
+#### Example Graph Structure
+
+```
+  stg_customers ──┐
+                  ├──> int_orders_enriched ──> fct_orders
+  stg_orders ─────┤
+                  │
+  stg_products ───┤
+                  ├──> dim_customers
+                  │
+                  └──> dim_products
+```
+
 ### Lifecycle
 
 ```
-┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│ Pipeline run │ ──> │ dbt docs generate│ ──> │ catalog.json +   │
-│ (step 1-5)   │     │ (step 6, .venv-  │     │ manifest.json    │
-│              │     │  dbt)            │     │ (in dbt/target/) │
-└──────────────┘     └──────────────────┘     └──────────────────┘
-                                                      │
-                                               ┌──────┴──────┐
-                                               │ make docs   │
-                                               │ (dbt docs   │
-                                               │  serve)     │
-                                               │ port 8080   │
-                                               └─────────────┘
+                     ┌─────────────────────────────────────────────────┐
+                     │         Pipeline Orchestrator                   │
+                     │  Step 1-5 (data → load → dbt → test → export)  │
+                     └──────────────────────┬──────────────────────────┘
+                                            │
+                     ┌──────────────────────▼──────────────────────────┐
+                     │  Step 6: dbt docs generate  (.venv-dbt)         │
+                     │  → dbt/target/manifest.json                     │
+                     │  → dbt/target/catalog.json                      │
+                     └──────────────────────┬──────────────────────────┘
+                                            │
+                     ┌──────────────────────▼──────────────────────────┐
+                     │  Step 7: generate_lineage.py  (.venv)           │
+                     │  → parses manifest.json via networkx.DiGraph    │
+                     │  → renders docs/lineage/current_data_lineage.png│
+                     └─────────────────────────────────────────────────┘
 ```
 
 ---
@@ -814,13 +898,14 @@ make pipeline
 # With a specific scale profile:
 .venv\Scripts\python scripts\orchestrate.py --profile small
 
-# The orchestrator runs all 6 steps automatically:
-#   [1] Generate Data      (.venv)
-#   [2] Load PostgreSQL    (.venv)
-#   [3] dbt Run            (.venv-dbt)
-#   [4] dbt Test           (.venv-dbt)
-#   [5] Excel Export       (.venv)
-#   [6] dbt Docs Generate  (.venv-dbt)
+# The orchestrator runs all 7 steps automatically:
+#   [1] Generate Data        (.venv)
+#   [2] Load PostgreSQL      (.venv)
+#   [3] dbt Run              (.venv-dbt)
+#   [4] dbt Test             (.venv-dbt)
+#   [5] Excel Export         (.venv)
+#   [6] dbt Docs Generate    (.venv-dbt)
+#   [7] Lineage Graph Export (.venv)
 ```
 
 ### View the Metadata Catalog
