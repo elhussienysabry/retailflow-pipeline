@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.load_to_postgres import (  # noqa: E402
-    CSV_TABLE_MAP,
+    SOURCE_MAP,
     ensure_raw_schema,
     get_engine,
     truncate_table,
@@ -90,12 +90,13 @@ class TestCSVTableMap:
     """Tests for the CSV-to-table mapping."""
 
     def test_has_expected_tables(self) -> None:
-        """Should have mappings for customers, products, and orders."""
-        tables = [t for _, t in CSV_TABLE_MAP]
+        """Verify table names match expectations (includes new POS JSON table)."""
+        tables = [t for _, t, _ in SOURCE_MAP]
         assert "raw.customers" in tables
         assert "raw.products" in tables
         assert "raw.orders" in tables
+        assert "raw.pos_store_sales" in tables
 
-    def test_has_three_mappings(self) -> None:
-        """Should have exactly three CSV-to-table mappings."""
-        assert len(CSV_TABLE_MAP) == 3
+    def test_has_four_mappings(self) -> None:
+        """Verify there are exactly four file-to-table mappings (CSV + JSON)."""
+        assert len(SOURCE_MAP) == 4

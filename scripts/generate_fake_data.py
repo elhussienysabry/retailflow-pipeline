@@ -4,9 +4,10 @@ RetailFlow Pipeline — Fake Data Generator
 
 Generates realistic fake retail data for the RetailFlow Pipeline:
 
-    - customers.csv — customer demographics
-    - products.csv  — product catalog
-    - orders.csv    — transaction history
+    - customers.csv        — customer demographics
+    - products.csv         — product catalog
+    - orders.csv           — online transaction history
+    - pos_store_sales.json — physical store POS sales (hybrid ingestion demo)
 
 Usage:
     python scripts/generate_fake_data.py
@@ -18,6 +19,7 @@ The output files are written to data/raw/.
 
 import argparse
 import csv
+import json
 import logging
 import os
 import random
@@ -31,10 +33,11 @@ from faker import Faker
 logger = logging.getLogger(__name__)
 
 # Scale profiles for quick dataset sizing
+#   - pos_sales are ~30 % of online orders, representing in-store traffic.
 SCALE_PROFILES: Dict[str, Dict[str, int]] = {
-    "small": {"customers": 1_000, "products": 100, "orders": 10_000},
-    "medium": {"customers": 10_000, "products": 500, "orders": 100_000},
-    "large": {"customers": 100_000, "products": 5_000, "orders": 1_000_000},
+    "small": {"customers": 1_000, "products": 100, "orders": 10_000, "pos_sales": 3_000},
+    "medium": {"customers": 10_000, "products": 500, "orders": 100_000, "pos_sales": 30_000},
+    "large": {"customers": 100_000, "products": 5_000, "orders": 1_000_000, "pos_sales": 300_000},
 }
 
 DEFAULT_PROFILE = "medium"
@@ -58,6 +61,19 @@ ORDER_STATUSES: List[Tuple[str, float]] = [
     ("completed", 0.80),
     ("returned", 0.10),
     ("pending", 0.10),
+]
+
+# Store IDs for POS locations
+STORE_IDS: List[str] = [
+    "STORE_NYC_001", "STORE_LAX_002", "STORE_CHI_003",
+    "STORE_HOU_004", "STORE_PHX_005", "STORE_PHL_006",
+    "STORE_SFO_007", "STORE_BOS_008", "STORE_DFW_009",
+    "STORE_MIA_010",
+]
+
+# Payment methods used in physical stores
+PAYMENT_METHODS: List[str] = [
+    "credit_card", "debit_card", "cash", "mobile_wallet",
 ]
 
 SUPPLIER_COUNTRIES: List[str] = [
@@ -105,6 +121,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Number of order records (overrides profile)",
     )
+    parser.add_argument(
+        "--pos-sales",
+        type=int,
+        default=None,
+        dest="pos_sales",
+        help="Number of POS store-sale records (overrides profile)",
+    )
     parsed = parser.parse_args()
 
     profile = SCALE_PROFILES[parsed.profile]
@@ -114,6 +137,8 @@ def parse_args() -> argparse.Namespace:
         parsed.products = profile["products"]
     if parsed.orders is None:
         parsed.orders = profile["orders"]
+    if parsed.pos_sales is None:
+        parsed.pos_sales = profile.get("pos_sales", parsed.orders // 3)
 
     return parsed
 
@@ -265,6 +290,48 @@ def generate_orders(
     return filepath
 
 
+def generate_pos_store_sales(
+    num_sales: int, product_ids: List[str]
+) -> str:
+    """Generate a JSON file of point-of-sale store transactions.
+
+    Args:
+        num_sales: Number of POS sale records to generate.
+        product_ids: List of valid product UUIDs to reference.
+
+    Returns:
+        The absolute file path of the generated JSON file.
+    """
+    output_dir = ensure_output_dir()
+    filepath = os.path.join(output_dir, "pos_store_sales.json")
+
+    records: list = []
+    for _ in range(num_sales):
+        ts = fake.date_time_between(start_date="-2y", end_date="now")
+        records.append(
+            {
+                "sale_id": str(uuid.uuid4()),
+                "store_id": fake.random_element(STORE_IDS),
+                "product_id": fake.random_element(product_ids),
+                "quantity": fake.random_int(min=1, max=5),
+                "unit_price_cents": fake.random_int(min=199, max=99999),
+                "total_amount": round(
+                    fake.random_int(min=199, max=99999)
+                    * fake.random_int(min=1, max=5),
+                    2,
+                ),
+                "transaction_timestamp": ts.isoformat(),
+                "payment_method": fake.random_element(PAYMENT_METHODS),
+            }
+        )
+
+    with open(filepath, mode="w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2)
+
+    logger.info("Generated %d POS store sales → %s", num_sales, filepath)
+    return filepath
+
+
 def main() -> None:
     """Main entry point: parse args, generate all datasets."""
     args = parse_args()
@@ -275,11 +342,13 @@ def main() -> None:
     )
 
     logger.info(
-        "Starting data generation (profile=%s): %d customers, %d products, %d orders",
+        "Starting data generation (profile=%s): %d customers, %d products, "
+        "%d orders, %d POS sales",
         args.profile,
         args.customers,
         args.products,
         args.orders,
+        args.pos_sales,
     )
 
     start_time = datetime.now()
@@ -293,19 +362,23 @@ def main() -> None:
         product_ids = _read_ids(products_path, "product_id")
 
         orders_path = generate_orders(args.orders, customer_ids, product_ids)
+        pos_path = generate_pos_store_sales(args.pos_sales, product_ids)
 
         elapsed = (datetime.now() - start_time).total_seconds()
         logger.info(
-            "Data generation complete! (%d customers, %d products, %d orders) in %.2f seconds",
+            "Data generation complete! (%d customers, %d products, "
+            "%d orders, %d POS sales) in %.2f seconds",
             args.customers,
             args.products,
             args.orders,
+            args.pos_sales,
             elapsed,
         )
         logger.info("Files created:")
         logger.info("  %s", customers_path)
         logger.info("  %s", products_path)
         logger.info("  %s", orders_path)
+        logger.info("  %s", pos_path)
 
     except Exception as exc:
         logger.error("Data generation failed: %s", exc, exc_info=True)

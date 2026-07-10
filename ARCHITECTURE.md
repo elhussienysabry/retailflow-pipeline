@@ -94,25 +94,59 @@ retailflow-pipeline/
   .________________________.
   |   FAKER SEED PROFILES  |       Scale profiles: small / medium / large
   |  (generate_fake_data)  |       ~10K customers, 500 products, 100K orders
-  |________________________|
-              |
-              | CSV files (data/raw/)
-              v
-  .________________________.
-  |  INGESTION (Python)    |       load_to_postgres.py
-  |  CSV  ──>  PostgreSQL  |       Truncate + insert (idempotent)
-  |         raw schema     |       Guardrails validate rows before insert
-  |________________________|
-         |            |
-         | clean      | bad rows
-         | rows       v
-         |         .________________.
-         |         |  DEAD LETTER   │
-         |         │  QUEUE (DLQ)   │       Layer 1 — Guardrails
-         |         │  data/rejected/│       Isolated, timestamped CSVs
-         |         │________________│       with rejection_reason column
+  |________________________|        ~3K POS sales (30 % of online volume)
+         |                   \
+         |                    \  JSON files (data/raw/)
+         | CSV files           \   pos_store_sales.json
+         | (data/raw/)          \
+         | customers.csv         \
+         | products.csv           \
+         | orders.csv              \
+         |                          |
+         v                          v
+  .________________________.  ._____________________________.
+  |  CSV INGESTION (Python)|  |  JSON INGESTION (Python)   |
+  |  ┌─ pandas chunksize   |  |  ┌─ json.load → DataFrame  |
+  |  │ Truncate + insert   |  |  │ Truncate + replace      |
+  |  │ Validation guard-   |  |  │ No guardrails (POS      |
+  |  │ rails per entity    |  |  │ data trusted at source) |
+  |  │ PII anonymisation   |  |  │_________________________|
+  |  │ (customers only)    |
+  |  │ DLQ bad rows        |
+  |  │_____________________|
+         |            |              |
+         | clean      | bad rows     |
+         | rows       v              |
+         |         .________________. |
+         |         │  DEAD LETTER   │ |
+         |         │  QUEUE (DLQ)   │ |
+         |         │  data/rejected/│ |
+         |         │________________│ |
+         |                           |
+         |            _______________/
+         |           /
+         v           v
+  .________________________________________.
+  │   PostgreSQL raw schema (port 5432)     │
+  │                                         │
+  │   raw.customers    raw.orders           │
+  │   raw.products     raw.pos_store_sales  │
+  │_________________________________________│
          |
-         | PostgreSQL (port 5432)
+         |  Schema Harmonisation
+         |  _harmonize_and_upsert_unified()
+         |  Maps: transaction_timestamp → transaction_date
+         |        sale_id → transaction_id
+         |  Adds: source_system ('online' / 'pos')
+         v
+  .________________________________________.
+  │   raw.unified_transactions              │  NEW
+  │   Primary Key: (transaction_id,         │
+  │                 source_system)          │
+  │   Upsert: INSERT ... ON CONFLICT        │
+  │          DO UPDATE                      │
+  |_________________________________________|
+         |
          v
   .________________________.
   |  dbt STAGING LAYER     |       stg_customers, stg_orders, stg_products
@@ -184,21 +218,23 @@ retailflow-pipeline/
 | Medium   | `medium`    | 10,000    | 500      | 100,000  | ~15 seconds      |
 | Large    | `large`     | 100,000   | 5,000    | 1,000,000| ~3 minutes       |
 
-**Resolution order:** `--profile` sets defaults → explicit `--customers` / `--products` / `--orders` flags override individual dimensions.
+**Resolution order:** `--profile` sets defaults → explicit `--customers` / `--products` / `--orders` / `--pos-sales` flags override individual dimensions.
 
-**Output:** 3 CSV files written to `data/raw/`:
+**Output:** 4 files written to `data/raw/`:
 - `customers.csv` — UUID, name, email (guaranteed unique), country, city, signup_date, age, gender
 - `products.csv` — UUID, name, category (weighted: Clothing 35%, Electronics 25%, Home 25%, Food 15%), price_cents, stock, supplier_country
 - `orders.csv` — UUID, FK→customers, FK→products, quantity, order_date, status (completed 80%, returned 10%, pending 10%), discount_pct, shipping_days
+- `pos_store_sales.json` — POS terminal sales from physical stores (JSON): `sale_id`, `store_id`, `product_id`, `quantity`, `unit_price_cents`, `total_amount`, `transaction_timestamp`, `payment_method`
 
-### CSV Loader — `scripts/load_to_postgres.py`
+### Hybrid Ingestion Engine — `scripts/load_to_postgres.py`
 
-**Purpose:** Stream CSV contents into the PostgreSQL `raw` schema with data quality guardrails.
+**Purpose:** Ingest both CSV (e-commerce) and JSON (POS store) source files into the PostgreSQL `raw` schema, then run schema harmonisation to produce a unified transactions table.
 
 **Behavior:**
 - Creates `raw` schema if missing (`CREATE SCHEMA IF NOT EXISTS`)
 - Truncates each target table before loading (idempotent)
-- Uses `pandas.read_csv(chunksize=10_000)` + `to_sql(method="multi")` for memory-efficient bulk inserts
+- CSV files use `pandas.read_csv(chunksize=10_000)` + validation guardrails + `to_sql(method="multi")`
+- JSON files use `json.load()` → `pd.DataFrame()` → `to_sql(if_exists="replace")` (POS data is trusted at source; no guardrail checks)
 - Column types: UUIDs as `string`, dates as `string` (cast later in dbt)
 
 **Data Quality Guardrails (per entity):**
@@ -223,6 +259,23 @@ retailflow-pipeline/
 - The transformation happens in `_anonymize_pii()` right after validation and before the SQL insert — only clean customer rows are anonymized
 - The raw CSV files on disk remain unmodified; only the database copy is obfuscated
 
+**Schema Harmonisation & Unified Upsert:**
+- After all raw source tables are loaded, `_harmonize_and_upsert_unified()` creates (if missing) and populates `raw.unified_transactions`
+- This table merges **online orders** (`raw.orders`) and **POS store sales** (`raw.pos_store_sales`) into a single schema-aligned table
+- **Column mapping:**
+  | Unified Column | Online Source | POS Source |
+  |---|---|--|
+  | `transaction_id` | `order_id` | `sale_id` |
+  | `source_system` | `'online'` | `'pos'` |
+  | `transaction_date` | `order_date` | `transaction_timestamp::date` |
+  | `total_amount` | `NULL` (computed in dbt) | `total_amount` |
+  | `store_id` | `NULL` | `store_id` |
+  | `customer_id` | `customer_id` | `NULL` |
+  | `status` | `status` | `'completed'` |
+  | `payment_method` | `NULL` | `payment_method` |
+- Uses `INSERT ... ON CONFLICT (transaction_id, source_system) DO UPDATE` for idempotent re-runs
+- The `source_system` discriminator (`'online'` / `'pos'`) enables downstream analytics to filter or compare channels
+
 ---
 
 ## 4. Layer 2 — PostgreSQL Warehouse (Storage)
@@ -240,10 +293,12 @@ retailflow-pipeline/
 **Schema layout after full pipeline run:**
 
 ```
-raw          (schema)  — 3 tables, loaded by load_to_postgres.py
+raw          (schema)  — 5 tables, loaded by load_to_postgres.py
 ├── customers
 ├── products
-└── orders
+├── orders
+├── pos_store_sales        (JSON-origin POS data)
+└── unified_transactions   (harmonised merge of orders + pos)
 
 staging      (schema)  — 3 views, created by dbt
 ├── stg_customers

@@ -14,7 +14,7 @@ RetailFlow Pipeline simulates a real-world task you would face as a junior data 
 
 To answer these questions, you need to:
 
-1. **Ingest** raw data from multiple sources (CSV files simulating an e-commerce platform)
+1. **Ingest** raw data from multiple heterogeneous sources — e-commerce CSVs (`customers.csv`, `products.csv`, `orders.csv`) and POS terminal JSON (`pos_store_sales.json`), with **schema harmonisation** merging both streams into a unified transaction table
 2. **Clean and validate** the data (remove duplicates, fix types, check quality)
 3. **Anonymize PII** — `first_name`, `last_name`, and `email` are SHA-256 hashed before storage (GDPR / CCPA compliant)
 4. **Load** it into a data warehouse (PostgreSQL)

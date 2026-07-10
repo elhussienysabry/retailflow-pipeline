@@ -1,10 +1,17 @@
 """
-RetailFlow Pipeline — CSV to PostgreSQL Loader with Data Quality Guardrails
-===========================================================================
+RetailFlow Pipeline — Hybrid Ingestion Engine
+===============================================
 
-Reads raw CSV files from data/raw/, validates rows before insertion,
-loads clean rows into PostgreSQL `raw` schema, and writes rejected rows
-to a Dead Letter Queue (data/rejected/).
+Reads CSV (e-commerce) and JSON (POS store) source files from ``data/raw/``,
+validates rows, loads clean data into the PostgreSQL ``raw`` schema, and
+runs schema harmonisation to create a unified ``raw.unified_transactions``
+table with upsert semantics.
+
+Supports multi-source hybrid ingestion:
+    - ``customers.csv``   — online customer records
+    - ``products.csv``    — product catalogue
+    - ``orders.csv``      — online e-commerce orders
+    - ``pos_store_sales.json`` — physical store POS sales
 
 Guardrail checks per entity:
     Customers:  customer_id not null, email contains '@'
@@ -28,15 +35,17 @@ from datetime import datetime
 from typing import Dict, List, Tuple
 
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
 
-CSV_TABLE_MAP: List[Tuple[str, str]] = [
-    ("customers.csv", "raw.customers"),
-    ("products.csv", "raw.products"),
-    ("orders.csv", "raw.orders"),
+SOURCE_MAP: List[Tuple[str, str, str]] = [
+    # (filename,       table_name,          file_type)
+    ("customers.csv", "raw.customers", "csv"),
+    ("products.csv", "raw.products", "csv"),
+    ("orders.csv", "raw.orders", "csv"),
+    ("pos_store_sales.json", "raw.pos_store_sales", "json"),
 ]
 
 DTYPE_MAP: Dict[str, object] = {
@@ -217,6 +226,164 @@ def _write_dlq(entity_name: str, rejected_df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# JSON ingestion
+# ---------------------------------------------------------------------------
+
+
+def _load_json_to_table(
+    engine: Engine, json_filename: str, table_name: str
+) -> int:
+    """Load a JSON file of records directly into a PostgreSQL table.
+
+    Args:
+        engine: SQLAlchemy Engine instance.
+        json_filename: e.g. 'pos_store_sales.json'.
+        table_name: e.g. 'raw.pos_store_sales'.
+
+    Returns:
+        Number of rows loaded.
+    """
+    data_dir = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
+    filepath = os.path.join(data_dir, json_filename)
+
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(
+            f"JSON file not found: {filepath}. Run generate_fake_data.py first."
+        )
+
+    logger.info("Loading %s → %s ...", filepath, table_name)
+
+    with open(filepath, encoding="utf-8") as f:
+        records: list = json.load(f)
+
+    if not records:
+        logger.warning("JSON file %s is empty.", filepath)
+        return 0
+
+    df = pd.DataFrame(records)
+    df.to_sql(
+        table_name.split(".")[1],
+        engine,
+        schema="raw",
+        if_exists="replace",
+        index=False,
+        method="multi",
+    )
+    logger.info("Loaded %d rows into %s", len(df), table_name)
+    return len(df)
+
+
+# ---------------------------------------------------------------------------
+# Schema harmonisation & unified upsert
+# ---------------------------------------------------------------------------
+
+_UNIFIED_TABLE = "raw.unified_transactions"
+
+_UNIFIED_DDL = """
+CREATE TABLE IF NOT EXISTS {table} (
+    transaction_id   TEXT NOT NULL,
+    source_system    TEXT NOT NULL,
+    product_id       TEXT,
+    quantity         INTEGER,
+    transaction_date DATE,
+    total_amount     NUMERIC(12,2),
+    store_id         TEXT,
+    customer_id      TEXT,
+    status           TEXT,
+    payment_method   TEXT,
+    discount_pct     INTEGER,
+    shipping_days    INTEGER,
+    ingested_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (transaction_id, source_system)
+);
+"""
+
+_UPSERT_SQL = """
+INSERT INTO {table} (
+    transaction_id, source_system, product_id, quantity,
+    transaction_date, total_amount, store_id, customer_id,
+    status, payment_method, discount_pct, shipping_days, ingested_at
+)
+SELECT
+    order_id               AS transaction_id,
+    'online'               AS source_system,
+    product_id,
+    quantity,
+    order_date::date       AS transaction_date,
+    NULL::numeric          AS total_amount,   -- revenue calc happens in dbt
+    NULL::text             AS store_id,
+    customer_id,
+    status,
+    NULL::text             AS payment_method,
+    discount_pct,
+    shipping_days,
+    NOW()                  AS ingested_at
+FROM raw.orders
+
+UNION ALL
+
+SELECT
+    sale_id                AS transaction_id,
+    'pos'                  AS source_system,
+    product_id,
+    quantity,
+    transaction_timestamp::date AS transaction_date,
+    total_amount           AS total_amount,
+    store_id,
+    NULL::text             AS customer_id,
+    'completed'            AS status,
+    payment_method,
+    NULL::integer          AS discount_pct,
+    NULL::integer          AS shipping_days,
+    NOW()                  AS ingested_at
+FROM raw.pos_store_sales
+
+ON CONFLICT (transaction_id, source_system) DO UPDATE SET
+    product_id       = EXCLUDED.product_id,
+    quantity         = EXCLUDED.quantity,
+    transaction_date = EXCLUDED.transaction_date,
+    total_amount     = EXCLUDED.total_amount,
+    store_id         = EXCLUDED.store_id,
+    status           = EXCLUDED.status,
+    payment_method   = EXCLUDED.payment_method,
+    ingested_at      = NOW();
+"""
+
+
+def _harmonize_and_upsert_unified(engine: Engine) -> int:
+    """Create (if missing) and upsert into ``raw.unified_transactions``.
+
+    Harmonises columns from ``raw.orders`` (online) and
+    ``raw.pos_store_sales`` (POS) into a single unified schema.
+
+    Args:
+        engine: SQLAlchemy Engine instance.
+
+    Returns:
+        Number of rows upserted.
+    """
+    logger.info("Creating unified transactions table if missing ...")
+    ddl = _UNIFIED_DDL.format(table=_UNIFIED_TABLE)
+    with engine.connect() as conn:
+        conn.exec_driver_sql(ddl)
+        conn.commit()
+
+    logger.info("Upserting harmonised transactions ...")
+    upsert = _UPSERT_SQL.format(table=_UNIFIED_TABLE)
+    with engine.connect() as conn:
+        result = conn.execute(text(upsert))
+        conn.commit()
+
+    count = result.rowcount
+    logger.info(
+        "Unified transactions upserted: %d rows into %s",
+        count,
+        _UNIFIED_TABLE,
+    )
+    return count
+
+
+# ---------------------------------------------------------------------------
 # Validation dispatch
 # ---------------------------------------------------------------------------
 
@@ -369,19 +536,39 @@ def main() -> None:
         grand_rejected = 0
         per_table: Dict[str, Dict[str, int]] = {}
 
-        for csv_file, table_name in CSV_TABLE_MAP:
-            truncate_table(engine, table_name)
-            loaded, rejected = load_csv_to_table(engine, csv_file, table_name)
-            grand_loaded += loaded
-            grand_rejected += rejected
-            per_table[csv_file] = {"loaded": loaded, "rejected": rejected}
+        for filename, table_name, file_type in SOURCE_MAP:
+            # JSON tables are created/replaced by _load_json_to_table,
+            # so skip the truncate step for them.
+            if file_type != "json":
+                truncate_table(engine, table_name)
+
+            if file_type == "json":
+                loaded = _load_json_to_table(engine, filename, table_name)
+                grand_loaded += loaded
+                per_table[filename] = {"loaded": loaded, "rejected": 0}
+            else:
+                loaded, rejected = load_csv_to_table(
+                    engine, filename, table_name
+                )
+                grand_loaded += loaded
+                grand_rejected += rejected
+                per_table[filename] = {"loaded": loaded, "rejected": rejected}
+
+        # Schema harmonisation: merge online + POS into unified table.
+        unified_count = _harmonize_and_upsert_unified(engine)
+        per_table["_unified_transactions"] = {
+            "loaded": unified_count,
+            "rejected": 0,
+        }
 
         elapsed = (datetime.now() - start_time).total_seconds()
         logger.info(
-            "Data loading complete! Loaded %d clean rows, "
-            "rejected %d bad rows to DLQ in %.2f seconds.",
+            "Hybrid ingestion complete! Loaded %d clean rows, "
+            "rejected %d bad rows to DLQ, "
+            "harmonised %d unified transactions in %.2f seconds.",
             grand_loaded,
             grand_rejected,
+            unified_count,
             elapsed,
         )
 
