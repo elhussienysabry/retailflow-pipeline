@@ -77,15 +77,15 @@ def check_postgres() -> Tuple[str, str]:
                 "docker",
                 "ps",
                 "--filter",
-                "name=retailflow-postgres",
+                "name=retailflow-db",
                 "--format",
                 "{{.Names}}",
             ]
         )
-        if "retailflow-postgres" not in result.stdout:
+        if "retailflow-db" not in result.stdout:
             return (
                 "FAIL",
-                "PostgreSQL container (retailflow-postgres) is not running",
+                "PostgreSQL container (retailflow-db) is not running",
             )
     except FileNotFoundError:
         return "FAIL", "Docker command not found"

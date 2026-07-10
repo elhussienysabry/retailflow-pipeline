@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RetailFlow Pipeline — Data Profile Report</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+                 Ubuntu, Cantarell, sans-serif;
+    background: #f4f6f9; color: #1a1a2e; line-height: 1.6; padding: 20px;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #fff; padding: 28px 32px; border-radius: 12px; margin-bottom: 24px;
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 12px;
+  }
+  header h1 { font-size: 22px; font-weight: 700; }
+  header .meta { font-size: 13px; color: #a0aec0; }
+
+  .summary-bar {
+    display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px;
+  }
+  .summary-bar .pill {
+    background: #fff; border-radius: 8px; padding: 12px 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    font-size: 14px;
+  }
+  .summary-bar .pill strong { font-size: 20px; color: #1a1a2e; }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; flex-wrap: wrap; margin-bottom: 0; }
+  .tabs input[type="radio"] { display: none; }
+  .tab-label {
+    padding: 12px 24px; background: #e2e8f0; cursor: pointer;
+    border-radius: 8px 8px 0 0; font-weight: 600; font-size: 14px;
+    color: #4a5568; transition: all 0.2s; margin-right: 4px;
+  }
+  .tab-label:hover { background: #cbd5e1; }
+  .tabs input:checked + .tab-label {
+    background: #fff; color: #1a1a2e; box-shadow: 0 -2px 4px rgba(0,0,0,0.06);
+  }
+  .tab-content { display: none; background: #fff; border-radius: 0 8px 8px 8px;
+    padding: 24px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+  .tab-content.active { display: block; }
+
+  /* ── Summary cards ── */
+  .summary-row {
+    display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px;
+  }
+  .card {
+    background: #f8fafc; border-radius: 8px; padding: 14px 18px;
+    flex: 1 0 120px; text-align: center; border: 1px solid #e2e8f0;
+  }
+  .card.warn { border-color: #f6ad55; background: #fffaf0; }
+  .card-val { display: block; font-size: 24px; font-weight: 700; color: #1a1a2e; }
+  .card-label { font-size: 11px; text-transform: uppercase; color: #718096;
+    letter-spacing: 0.5px; }
+
+  /* ── Table ── */
+  .profile-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .profile-table thead { background: #edf2f7; }
+  .profile-table th {
+    padding: 10px 12px; text-align: left; font-weight: 600; color: #2d3748;
+    border-bottom: 2px solid #cbd5e1; white-space: nowrap;
+  }
+  .profile-table td {
+    padding: 10px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle;
+  }
+  .profile-table tr:hover { background: #f7fafc; }
+  .col-name { font-weight: 600; white-space: nowrap; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  code { background: #edf2f7; padding: 2px 6px; border-radius: 4px;
+    font-size: 12px; color: #2b6cb0; }
+  .bar-cell { display: flex; align-items: center; gap: 8px; }
+  .bar-container { flex: 1; height: 8px; background: #edf2f7; border-radius: 4px;
+    overflow: hidden; min-width: 80px; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .bar-label { font-size: 12px; color: #4a5568; min-width: 44px; text-align: right; }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px;
+    border-radius: 10px; margin-left: 6px; text-transform: uppercase;
+    vertical-align: middle;
+  }
+  .badge-danger { background: #fed7d7; color: #c53030; }
+  .badge-warning { background: #fefcbf; color: #975a16; }
+  .badge-info { background: #bee3f8; color: #2a4365; }
+
+  /* ── Details / Stats ── */
+  .stats-cell details summary {
+    cursor: pointer; color: #4a5568; font-size: 12px; font-weight: 600;
+    padding: 4px 8px; border-radius: 4px; user-select: none;
+  }
+  .stats-cell details summary:hover { background: #edf2f7; }
+  .stats-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 4px 12px; padding: 10px 0 4px;
+  }
+  .stats-grid.compact { grid-template-columns: 1fr 1fr; }
+  .stat { display: flex; flex-direction: column; }
+  .stat-label { font-size: 10px; text-transform: uppercase; color: #718096;
+    letter-spacing: 0.3px; }
+  .stat-val { font-size: 13px; font-weight: 600; color: #2d3748; }
+  .top-val {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px;
+    display: inline-block;
+  }
+
+  @media (max-width: 768px) {
+    .stats-grid { grid-template-columns: 1fr 1fr; }
+    .summary-row { gap: 8px; }
+    .card { flex: 1 0 80px; padding: 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div>
+      <h1>RetailFlow Pipeline — Data Profile Report</h1>
+      <div class="meta">Generated: 2026-07-10 12:10:40 UTC &middot; 3
+        tables &middot; 110,500 rows &middot; 30 columns</div>
+    </div>
+  </header>
+
+  <div class="summary-bar">
+    <div class="pill"><strong>110,500</strong> Rows</div>
+    <div class="pill"><strong>30</strong> Columns</div>
+    <div class="pill"><strong>3</strong> Tables</div>
+  </div>
+
+  <div class="tabs">
+    <input type="radio" name="tabs" id="tab-dim_customers" checked>
+<label for="tab-dim_customers" class="tab-label active">Customers Dimension</label>
+<input type="radio" name="tabs" id="tab-dim_products" >
+<label for="tab-dim_products" class="tab-label ">Products Dimension</label>
+<input type="radio" name="tabs" id="tab-fct_orders" >
+<label for="tab-fct_orders" class="tab-label ">Orders Fact</label>
+
+  </div>
+
+  
+        <div class="tab-content active" id="content-dim_customers">
+          <div class="summary-row">
+          <div class="card"><span class="card-val">10,000</span><span class="card-label">Total Rows</span></div>
+          <div class="card"><span class="card-val">11</span><span class="card-label">Columns</span></div>
+          <div class="card"><span class="card-val">3</span><span class="card-label">Numeric</span></div>
+          <div class="card"><span class="card-val">8</span><span class="card-label">Categorical</span></div>
+          <div class="card"><span class="card-val">0</span><span class="card-label">Null Cells</span></div>
+          <div class="card warn"><span class="card-val">3</span><span class="card-label">High-Cardinality</span></div>
+        </div>
+          <table class="profile-table">
+            <thead>
+              <tr>
+                <th>Column</th>
+                <th>Type</th>
+                <th>Unique</th>
+                <th>Missing</th>
+                <th>Missing %</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              
+            <tr>
+              <td class="col-name">customer_id <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>TEXT</code></td>
+              <td class="num">10,000</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">000164d6-c455-48fd-b7d3-e8cc51e8b505</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.01%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">first_name </td>
+              <td><code>TEXT</code></td>
+              <td class="num">664</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">34550715062af006ac4fab288de67ecb44793c3a05c475227241535f6ef7a81b</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">219 (2.19%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">last_name </td>
+              <td><code>TEXT</code></td>
+              <td class="num">986</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">6627835f988e2c5e50533d491163072d3f4f41f5c8b04630150debb3722ca2dd</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">216 (2.16%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">email <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>TEXT</code></td>
+              <td class="num">10,000</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">c15080bca58c1afd2934b0493b0920aff40c8c8189a2b7b14e11f4d66cd96281</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.01%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">country </td>
+              <td><code>TEXT</code></td>
+              <td class="num">243</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">Congo</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">83 (0.83%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">city </td>
+              <td><code>TEXT</code></td>
+              <td class="num">7,663</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">New Jennifer</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">14 (0.14%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">signup_date </td>
+              <td><code>DATE</code></td>
+              <td class="num">1,096</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">2024-02-12 00:00:00</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">21 (0.21%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">age </td>
+              <td><code>INTEGER</code></td>
+              <td class="num">63</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">18</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">80</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">48.9603</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">49</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">18.2535</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">33</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">65</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.0005</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">gender </td>
+              <td><code>TEXT</code></td>
+              <td class="num">3</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">Female</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">3,361 (33.61%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">total_orders </td>
+              <td><code>BIGINT</code></td>
+              <td class="num">24</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">1</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">25</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">10</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">10</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">3.1372</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">8</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">12</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.3226</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">lifetime_value_cents <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>BIGINT</code></td>
+              <td class="num">9,987</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">36,756.00</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">8,290,961.00</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">2,730,346.27</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">2,640,152.00</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">1,127,277.79</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">1,911,121.75</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">3,428,913.25</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.4964</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tab-content " id="content-dim_products">
+          <div class="summary-row">
+          <div class="card"><span class="card-val">500</span><span class="card-label">Total Rows</span></div>
+          <div class="card"><span class="card-val">9</span><span class="card-label">Columns</span></div>
+          <div class="card"><span class="card-val">5</span><span class="card-label">Numeric</span></div>
+          <div class="card"><span class="card-val">4</span><span class="card-label">Categorical</span></div>
+          <div class="card"><span class="card-val">0</span><span class="card-label">Null Cells</span></div>
+          <div class="card warn"><span class="card-val">4</span><span class="card-label">High-Cardinality</span></div>
+        </div>
+          <table class="profile-table">
+            <thead>
+              <tr>
+                <th>Column</th>
+                <th>Type</th>
+                <th>Unique</th>
+                <th>Missing</th>
+                <th>Missing %</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              
+            <tr>
+              <td class="col-name">product_id <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>TEXT</code></td>
+              <td class="num">500</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">00ef695f-514e-41ff-8795-ef9487b20e59</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.2%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">product_name <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>TEXT</code></td>
+              <td class="num">500</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">Training Tough</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.2%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">category </td>
+              <td><code>TEXT</code></td>
+              <td class="num">4</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">Clothing</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">178 (35.6%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">price_cents <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>INTEGER</code></td>
+              <td class="num">499</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">691</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">99,566.00</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">49,636.90</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">47,507.00</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">28,948.55</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">24,443.50</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">75,729.25</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.0521</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">stock_quantity </td>
+              <td><code>INTEGER</code></td>
+              <td class="num">386</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">1</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">999</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">499.4300</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">481.5000</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">288.6443</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">255.7500</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">749.2500</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.0125</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">supplier_country </td>
+              <td><code>TEXT</code></td>
+              <td class="num">10</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">China</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">64 (12.8%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">total_orders </td>
+              <td><code>BIGINT</code></td>
+              <td class="num">68</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">159</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">237</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">200</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">200</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">13.7685</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">190</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">210</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">-0.0573</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">total_units_sold </td>
+              <td><code>BIGINT</code></td>
+              <td class="num">258</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">826</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">1,326.00</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">1,101.67</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">1,102.50</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">86.8677</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">1,042.00</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">1,159.00</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">-0.042</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">total_revenue_cents <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>BIGINT</code></td>
+              <td class="num">500</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">736,005.00</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">126,289,404.00</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">54,606,925.35</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">51,670,301.50</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">32,126,941.82</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">26,733,972.00</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">82,752,632.00</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.113</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tab-content " id="content-fct_orders">
+          <div class="summary-row">
+          <div class="card"><span class="card-val">100,000</span><span class="card-label">Total Rows</span></div>
+          <div class="card"><span class="card-val">10</span><span class="card-label">Columns</span></div>
+          <div class="card"><span class="card-val">5</span><span class="card-label">Numeric</span></div>
+          <div class="card"><span class="card-val">5</span><span class="card-label">Categorical</span></div>
+          <div class="card"><span class="card-val">0</span><span class="card-label">Null Cells</span></div>
+          <div class="card warn"><span class="card-val">1</span><span class="card-label">High-Cardinality</span></div>
+        </div>
+          <table class="profile-table">
+            <thead>
+              <tr>
+                <th>Column</th>
+                <th>Type</th>
+                <th>Unique</th>
+                <th>Missing</th>
+                <th>Missing %</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              
+            <tr>
+              <td class="col-name">order_id <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>TEXT</code></td>
+              <td class="num">100,000</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">26837663-4a60-4a5a-9afd-92c8f798f984</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.0%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">customer_id </td>
+              <td><code>TEXT</code></td>
+              <td class="num">10,000</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">03134385-af53-460a-a7fe-653f20d8c38b</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">25 (0.03%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">product_id </td>
+              <td><code>TEXT</code></td>
+              <td class="num">500</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">cd9bfd56-cee6-48b6-b455-c7d88ce64e0f</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">237 (0.24%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">order_date </td>
+              <td><code>DATE</code></td>
+              <td class="num">731</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">2025-04-07 00:00:00</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">179 (0.18%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">quantity </td>
+              <td><code>INTEGER</code></td>
+              <td class="num">10</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">1</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">10</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">5.5084</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">5</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">2.8747</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">3</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">8</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">-0.0019</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">discount_pct </td>
+              <td><code>INTEGER</code></td>
+              <td class="num">51</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">50</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">25.0180</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">25</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">14.7126</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">12</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">38</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">-0.0001</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">status </td>
+              <td><code>TEXT</code></td>
+              <td class="num">3</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">completed</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">79,962 (79.96%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">shipping_days </td>
+              <td><code>INTEGER</code></td>
+              <td class="num">14</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">1</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">14</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">7.4943</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">8</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">4.0261</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">4</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">11</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">-0.0014</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">gross_revenue_dollars </td>
+              <td><code>NUMERIC</code></td>
+              <td class="num">4,961</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">6.9100</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">9,956.60</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">2,730.35</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">2,023.64</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">2,293.50</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">854.7200</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">4,044.48</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.973</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">net_revenue_dollars </td>
+              <td><code>NUMERIC</code></td>
+              <td class="num">69,928</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid">
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">3.4600</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">9,881.80</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">2,046.86</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">1,507.17</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">1,797.95</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">627.0950</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">3,011.45</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">1.1936</span></div>
+                </div>
+                </details>
+              </td>
+            </tr>
+            </tbody>
+          </table>
+        </div>
+
+  <footer style="margin-top: 32px; text-align: center; font-size: 12px; color: #a0aec0;">
+    RetailFlow Pipeline &middot; Automated Data Profiling Report
+  </footer>
+</div>
+</body>
+</html>

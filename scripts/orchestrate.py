@@ -18,6 +18,7 @@ Alerts are dispatched to a Slack/Discord webhook at key states:
 
 import argparse
 import json
+import locale
 import logging
 import os
 import subprocess
@@ -162,7 +163,7 @@ def _dbt_exe() -> str:
 def _step_box(num: int, total: int, name: str) -> str:
     width = 68
     sep = "-" * width
-    icons = ["[DATA]", "[LOAD]", "[DBT]", "[TEST]", "[EXCEL]", "[DOCS]", "[LINEAGE]"]
+    icons = ["[DATA]", "[LOAD]", "[DBT]", "[TEST]", "[EXCEL]", "[DOCS]", "[LINEAGE]", "[PROFILE]"]
     icon = icons[num - 1] if num <= len(icons) else "[...]"
     return STEP_HEADER.format(
         sep=sep, emoji=icon, num=num, total=total, name=name
@@ -186,13 +187,18 @@ def _run_command(
     logger.info("Running: %s", " ".join(str(c) for c in cmd))
     logger.info("  Working directory: %s", cwd)
 
+    # Use the locale's preferred encoding (cp1252 on US Windows, utf-8 on
+    # Linux) so that non-ASCII characters (e.g. em dashes in log
+    # messages) do not crash the pipe with a UnicodeDecodeError.
+    sys_enc = locale.getpreferredencoding() or "utf-8"
     proc = subprocess.Popen(
         cmd,
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        encoding="utf-8",
+        encoding=sys_enc,
+        errors="replace",
     )
 
     output_lines: List[str] = []
@@ -429,6 +435,15 @@ def step_generate_lineage() -> int:
     return result.returncode
 
 
+def step_generate_profiling() -> int:
+    """Step 8: Generate HTML data profile report from mart tables."""
+    result = _run_command(
+        [_py_exe(), str(PROJECT_ROOT / "scripts" / "generate_profiling.py")],
+        label="generate-profiling",
+    )
+    return result.returncode
+
+
 PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("Generate Data", step_generate_data),
     ("Load to PostgreSQL", step_load_to_postgres),
@@ -437,6 +452,7 @@ PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("Excel Export", step_excel_export),
     ("dbt Docs Generate", step_dbt_docs_generate),
     ("Lineage Graph Export", step_generate_lineage),
+    ("Data Profile Report", step_generate_profiling),
 ]
 
 
