@@ -62,7 +62,7 @@ class TestCheckPostgres:
         self, mock_create_engine: MagicMock, mock_run_cmd: MagicMock
     ) -> None:
         mock_run_cmd.return_value = MagicMock(
-            stdout="retailflow-postgres\n", returncode=0
+            stdout="retailflow-db\n", returncode=0
         )
         mock_conn = MagicMock()
         mock_engine = MagicMock()
@@ -86,7 +86,7 @@ class TestCheckPostgres:
         self, mock_create_engine: MagicMock, mock_run_cmd: MagicMock
     ) -> None:
         mock_run_cmd.return_value = MagicMock(
-            stdout="retailflow-postgres\n", returncode=0
+            stdout="retailflow-db\n", returncode=0
         )
         mock_create_engine.side_effect = Exception("Connection refused")
 
