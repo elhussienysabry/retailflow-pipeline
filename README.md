@@ -20,7 +20,8 @@ To answer these questions, you need to:
 4. **Load** it into a data warehouse (PostgreSQL)
 5. **Transform** it into analysis-ready tables using dbt (staging → intermediate → marts)
 6. **Use dbt Incremental Loading** — the core `fct_orders` table processes only new/changed data each run, avoiding costly full refreshes as the warehouse grows
-7. **Run analytics queries** to answer business questions
+7. **Automated SLA notifications** — failed dbt data quality tests trigger rich Discord/Slack alerts listing every breached test with its unique ID, status, and database message
+8. **Run analytics queries** to answer business questions
 
 This project teaches the **modern data stack** — tools and patterns used at real companies like Airbnb, Spotify, and GitLab.
 
@@ -650,7 +651,7 @@ If any step returns a non-zero exit code, the orchestrator logs a critical error
 
 The orchestrator integrates with `scripts/alerts.py` to dispatch live notifications at key states:
 - **Warning** — ingestion phase finishes with DLQ rejected rows > 0
-- **Critical** — dbt tests fail (circuit breaker fires)
+- **Critical** — dbt tests fail (circuit breaker fires), with a **rich metadata payload** listing every failed/errored test (unique ID, status, execution time, and database message) parsed from `run_results.json`
 - **Success** — all 6 steps complete, with total duration summary
 
 ### Usage

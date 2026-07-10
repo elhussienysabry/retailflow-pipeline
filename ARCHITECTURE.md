@@ -632,6 +632,19 @@ Pipeline Event ──> orchestrator ──> send_pipeline_alert()
 | `warning`  | Amber  | Ingestion finishes with DLQ rejected rows > 0 |
 | `critical` | Red    | dbt tests fail (circuit breaker fires) |
 
+### dbt Test Metadata Alerting
+
+When dbt data quality tests fail, the orchestrator dispatches a **rich, metadata-rich alert** that goes beyond a simple exit-code notification:
+
+1. **`parse_dbt_test_results()`** (`scripts/alerts.py`) reads `dbt/target/run_results.json` immediately after the `dbt test` command exits
+2. Every result with `status == "fail"` or `status == "error"` is extracted — including the test's `unique_id`, `execution_time`, and error `message`
+3. The alert lists up to **5 individual test failures** inline, showing the short test name, status (`FAIL` / `ERROR`), and the database message (e.g. "Got 10000 results, configured to fail if != 0")
+4. If more than 5 tests fail, a summary line shows the remainder count
+5. The payload also includes the total tests run, failed count, errored count, and the dbt process exit code
+
+**Alert title:** `🚨 DATA QUALITY SLA BREACH: dbt Test Failed!`  
+**Colour:** Red (`0xFF0000`)
+
 ### Key Design Decisions
 
 | Concern | Implementation |
@@ -641,6 +654,7 @@ Pipeline Event ──> orchestrator ──> send_pipeline_alert()
 | **Colour coding** | Discord embeds use `color` field: `0x57F287` (green), `0xFEE75C` (amber), `0xED4245` (red) |
 | **Cloudflare bypass** | Custom `User-Agent` header mimics a real browser to avoid 403 blocks from containerised requests |
 | **Structured fields** | DLQ warning includes Loaded / Rejected / Rejection Rate %; failure alert includes exit code |
+| **Rich dbt failure payload** | `parse_dbt_test_results()` extracts per-test metadata from `run_results.json` — up to 5 individual failures are listed inline with their unique ID, status, and database message |
 
 ### Usage
 
