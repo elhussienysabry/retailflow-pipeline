@@ -19,7 +19,8 @@ To answer these questions, you need to:
 3. **Anonymize PII** — `first_name`, `last_name`, and `email` are SHA-256 hashed before storage (GDPR / CCPA compliant)
 4. **Load** it into a data warehouse (PostgreSQL)
 5. **Transform** it into analysis-ready tables using dbt (staging → intermediate → marts)
-6. **Run analytics queries** to answer business questions
+6. **Use dbt Incremental Loading** — the core `fct_orders` table processes only new/changed data each run, avoiding costly full refreshes as the warehouse grows
+7. **Run analytics queries** to answer business questions
 
 This project teaches the **modern data stack** — tools and patterns used at real companies like Airbnb, Spotify, and GitLab.
 

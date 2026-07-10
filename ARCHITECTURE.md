@@ -291,7 +291,15 @@ marts        (schema)  — 3 tables, created by dbt
 | `dim_products` | Dimension | 1 row per product | `total_orders`, `total_units_sold`, `total_revenue_cents` |
 | `fct_orders` | Fact | 1 row per order line | `gross_revenue_dollars`, `net_revenue_dollars` (via `cents_to_dollars()` macro) |
 
-**Materialization:** Tables (snapshot for analytics performance).
+**Materialization:**
+- `dim_customers`, `dim_products` — **table** (full refresh each run; small, stable dimension data)
+- `fct_orders` — **incremental** (only new/changed order dates are processed; avoids re-processing the full order history)
+
+**`fct_orders` Incremental Strategy:**
+- `unique_key: order_id` enables Upsert semantics (dbt `MERGE` on PostgreSQL): existing rows are updated, new rows are inserted
+- The `{% if is_incremental() %}` block filters the source CTE to `WHERE order_date >= (SELECT MAX(order_date) FROM {{ this }})`, so each run processes only the latest batch of orders
+- On the **first run** (empty target table), the `is_incremental()` block is skipped and all historical data is loaded — subsequent runs are lightweight
+- This drastically reduces runtime as `fct_orders` grows: a full refresh over millions of rows is replaced by a single-day incremental scan
 
 ### dbt Tests
 

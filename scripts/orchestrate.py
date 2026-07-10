@@ -293,12 +293,18 @@ def step_dbt_run() -> int:
     dbt_dir = PROJECT_ROOT / "dbt"
 
     for model_group in ("staging", "intermediate", "marts"):
-        logger.info("--- dbt run --select %s ---", model_group)
-        result = _run_command(
-            [dbt, "run", "--select", model_group],
-            cwd=dbt_dir,
-            label=f"dbt-run-{model_group}",
+        cmd = [dbt, "run", "--select", model_group]
+        # Full-refresh marts so the incremental fact table is rebuilt from
+        # scratch alongside the dimension tables — otherwise stale FK refs
+        # in the incremental backlog will fail relationship tests.
+        if model_group == "marts":
+            cmd.append("--full-refresh")
+        logger.info(
+            "--- dbt run --select %s%s ---",
+            model_group,
+            " --full-refresh" if model_group == "marts" else "",
         )
+        result = _run_command(cmd, cwd=dbt_dir, label=f"dbt-run-{model_group}")
         if result.returncode != 0:
             return result.returncode
     return 0

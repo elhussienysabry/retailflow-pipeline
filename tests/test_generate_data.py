@@ -19,7 +19,11 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.generate_fake_data import generate_customers, generate_products, generate_orders  # noqa: E402
+from scripts.generate_fake_data import (  # noqa: E402
+    generate_customers,
+    generate_products,
+    generate_orders,
+)
 
 
 class TestGenerateCustomers:

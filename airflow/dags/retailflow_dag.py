@@ -142,6 +142,8 @@ run_dbt_tests = BashOperator(
 # =============================================================================
 # Task 8: Notify success with pipeline summary
 # =============================================================================
+
+
 def notify_success_fn(**context) -> None:
     """Query row counts from each layer and log a summary.
 
