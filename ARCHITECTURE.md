@@ -743,11 +743,14 @@ When dbt data quality tests fail, the orchestrator dispatches a **rich, metadata
 ### Usage
 
 ```bash
-# Set the webhook URL in .env
+# Set the webhook URL in .env (auto-loaded by alerts.py)
 PIPELINE_WEBHOOK_URL=https://discord.com/api/webhooks/...
 
 # Alerts fire automatically during pipeline execution
 python scripts/orchestrate.py --profile small
+
+# Diagnostic: send a test message to verify your webhook config
+python scripts/alerts.py --test-webhook
 ```
 
 ---

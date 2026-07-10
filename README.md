@@ -851,8 +851,13 @@ The pipeline can send real-time alerts to **Discord** (Block Kit embeds) or **Sl
    ```bash
    PIPELINE_WEBHOOK_URL=https://discord.com/api/webhooks/...
    ```
-   Add it to `.env` (and `.env.example`) in the project root.
-3. **Restart containers** so the new variable is picked up:
+    Add it to `.env` (and `.env.example`) in the project root.
+    The `.env` file is auto-loaded by ``alerts.py`` — no manual ``export`` needed.
+3. **Verify** with the diagnostic CLI:
+    ```bash
+    python scripts/alerts.py --test-webhook
+    ```
+4. **Restart containers** so the new variable is picked up:
    ```bash
    docker compose down
    docker compose up -d

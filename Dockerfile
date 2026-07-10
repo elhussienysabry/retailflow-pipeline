@@ -51,7 +51,10 @@ RUN pip install --no-cache-dir \
     tqdm \
     openpyxl \
     streamlit \
-    plotly
+    plotly \
+    requests \
+    networkx \
+    matplotlib
 
 # ------------------------------------------------------------------
 # Layer 3: Isolated dbt environment

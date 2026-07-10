@@ -44,3 +44,10 @@ openpyxl>=3.1.0
 # Dashboard
 streamlit>=1.35.0
 plotly>=5.18.0
+
+# Alerting & webhooks
+requests>=2.31.0
+
+# Lineage graph export
+networkx>=3.1
+matplotlib>=3.8.0
