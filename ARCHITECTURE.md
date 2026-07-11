@@ -9,17 +9,19 @@
 
 1. [Project Directory Blueprint](#1-project-directory-blueprint)
 2. [ASCII Data Flow Diagram](#2-ascii-data-flow-diagram)
-3. [Layer 1 — Data Generation (Ingestion)](#3-layer-1--data-generation-ingestion)
-4. [Layer 2 — PostgreSQL Warehouse (Storage)](#4-layer-2--postgresql-warehouse-storage)
-5. [Layer 3 — dbt Transformation (Processing)](#5-layer-3--dbt-transformation-processing)
-6. [Layer 4 — Orchestration Layer](#6-layer-4--orchestration-layer)
-7. [Layer 5 — Consumption Layer (Business-Facing)](#7-layer-5--consumption-layer-business-facing)
-8. [Quality Guardrails — CI/CD Pipeline](#8-quality-guardrails--cicd-pipeline)
-9. [Containerization & Deployment](#9-containerization--deployment)
-10. [Virtual Environment Strategy](#10-virtual-environment-strategy)
-11. [Layer 6 — Observability & Alerting](#11-layer-6--observability--alerting)
-12. [Layer 7 — Data Governance & Lineage](#12-layer-7--data-governance--lineage)
-13. [Step-by-Step Execution Sequence](#13-step-by-step-execution-sequence)
+3. [Layer 0 — Schema Drift Detection](#3-layer-0--schema-drift-detection)
+4. [Layer 1 — Data Generation (Ingestion)](#4-layer-1--data-generation-ingestion)
+5. [Layer 2 — PostgreSQL Warehouse (Storage)](#5-layer-2--postgresql-warehouse-storage)
+6. [Layer 3 — dbt Transformation (Processing)](#6-layer-3--dbt-transformation-processing)
+7. [Layer 4 — Orchestration Layer](#7-layer-4--orchestration-layer)
+8. [Layer 5 — Consumption Layer (Business-Facing)](#8-layer-5--consumption-layer-business-facing)
+9. [Quality Guardrails — CI/CD Pipeline](#9-quality-guardrails--cicd-pipeline)
+10. [Containerization & Deployment](#10-containerization--deployment)
+11. [Virtual Environment Strategy](#11-virtual-environment-strategy)
+12. [Layer 6 — Observability & Alerting](#12-layer-6--observability--alerting)
+13. [Layer 7 — Data Governance & Lineage](#13-layer-7--data-governance--lineage)
+14. [Layer 8 — Data Profiling](#14-layer-8--data-profiling)
+15. [Step-by-Step Execution Sequence](#15-step-by-step-execution-sequence)
 
 ---
 
@@ -28,75 +30,70 @@
 ```
 retailflow-pipeline/
 │
-├── .github/workflows/         # CI/CD: GitHub Actions (lint, test, dbt-parse)
-├── dbt/                       # dbt transformation layer (isolated)
+├── .venv/                        # Main Python env (pandas, streamlit, etc.)
+├── .venv-dbt/                    # Isolated dbt env (dbt-core, dbt-postgres)
+│
+├── scripts/                      # Core Python ETL scripts
+│   ├── orchestrate.py            # 8-step pipeline orchestrator + circuit breaker
+│   ├── generate_fake_data.py     # Faker synthetic data (CSV + JSON)
+│   ├── load_to_postgres.py       # Hybrid ingestion, schema drift detector, PII hash
+│   ├── generate_lineage.py       # NetworkX lineage graph renderer
+│   ├── generate_profiling.py     # Pandas data profiling → HTML report
+│   ├── alerts.py                 # Discord/Slack webhook dispatcher
+│   └── project_status.py         # E2E health check
+│
+├── dbt/                          # dbt transformation project
 │   ├── models/
-│   │   ├── staging/           # Mirror raw tables, clean & type
-│   │   ├── intermediate/      # Join staging tables, enrich
-│   │   └── marts/             # Business-ready dims + fact
-│   ├── macros/                # Jinja SQL macros (cents_to_dollars, schema override)
-│   ├── tests/                 # Custom dbt data tests
-│   ├── profiles.yml           # DB connection (env-var driven)
-│   └── dbt_project.yml        # dbt project config
+│   │   ├── staging/              # Clean & type (3 views)
+│   │   ├── intermediate/         # Join & enrich (1 view)
+│   │   └── marts/                # Business-ready dims + fact (3 tables)
+│   ├── tests/                    # Custom singular tests (2)
+│   ├── macros/                   # Jinja SQL macros
+│   ├── profiles.yml              # DB connection (env-var driven)
+│   └── dbt_project.yml           # dbt config
 │
-├── scripts/                   # Core Python ETL scripts
-│   ├── orchestrate.py         # Centralised pipeline orchestrator (new)
-│   ├── generate_fake_data.py  # Faker-based synthetic data generator
-│   ├── load_to_postgres.py    # CSV PostgreSQL (raw schema)
-│   └── project_status.py      # Health check for all pipeline components
+├── src/                          # Python package
+│   ├── dashboard/app.py          # Streamlit KPI dashboard
+│   ├── exports/excel_exporter.py # Styled Excel workbook
+│   └── data_generator/           # Re-exports from scripts/
 │
-├── src/                       # Python package — dashboard & export
-│   ├── dashboard/app.py       # Streamlit interactive dashboard
-│   ├── exports/excel_exporter.py  # Styled Excel analytics export
-│   └── data_generator/__init__.py # Re-exports from scripts/
+├── sql/
+│   ├── schema/                   # DDL (CREATE SCHEMA / TABLE)
+│   └── analytics/                # Business analysis queries
 │
-├── sql/                       # Raw SQL for reference
-│   ├── schema/                # DDL (CREATE SCHEMA / TABLE)
-│   └── analytics/             # Business analysis queries
+├── tests/                        # 77+ pytest tests
+├── data/
+│   ├── raw/                      # Generated CSVs + JSON (gitignored)
+│   ├── rejected/                 # Dead Letter Queue — rejected rows (gitignored)
+│   └── rejected_schemas/         # Schema drift quarantine (gitignored)
+├── outputs/                      # Excel exports (gitignored)
+├── docs/
+│   ├── lineage/                  # current_data_lineage.png
+│   └── profiling/                # retailflow_data_profile.html
 │
-├── tests/                     # pytest suite (77+ tests)
-├── data/raw/                  # Generated CSVs (gitignored)
-│   └── .gitkeep
-├── data/rejected/             # Dead Letter Queue — rejected rows (gitignored)
-│   └── .gitkeep
-├── outputs/                   # Excel exports (gitignored)
-│   └── .gitkeep
-├── images/                    # Screenshots for README
-│   └── dashboard.png
-│
-├── .github/workflows/ci_cd.yml  # CI/CD pipeline definition
-├── ARCHITECTURE.md            # This file
-├── README.md                  # Project overview & usage
-├── Makefile                   # Dev workflow commands
-├── requirements.txt           # Python dependencies
-├── docker-compose.yml         # PostgreSQL + pgAdmin
-└── .env.example               # Environment template
+├── .github/workflows/ci_cd.yml   # CI/CD: lint, test, dbt-parse
+├── docker-compose.yml            # PostgreSQL 15 + app + pgAdmin
+├── Dockerfile                    # Multi-stage, dual-venv image
+├── Makefile                      # Dev workflow commands
+├── ARCHITECTURE.md               # This file
+└── README.md                     # Project overview
 ```
-
-### What was removed
-
-| Artifact | Reason |
-|----------|--------|
-| `dbt/.user.yml` | Auto-generated dbt metadata; not for version control |
-| `tmp_*.py` | One-off diagnostic scripts |
-| `images/dashbboard.png` | Typo; duplicate of `dashboard.png` |
-| All `__pycache__/` | Python bytecode; already gitignored, cleaned manually |
 
 ---
 
 ## 2. ASCII Data Flow Diagram
 
 ```
- RETAILFLOW PIPELINE — END-TO-END DATA FLOW
- ============================================
+  RETAILFLOW PIPELINE — END-TO-END DATA FLOW
+  ============================================
 
 
   .________________________.
-  |   FAKER SEED PROFILES  |       Scale profiles: small / medium / large
-  |  (generate_fake_data)  |       ~10K customers, 500 products, 100K orders
-  |________________________|        ~3K POS sales (30 % of online volume)
+  |  FAKER DATA GENERATOR  |       Scale profiles: small / medium / large
+  |  (generate_fake_data)  |       4 output files in data/raw/
+  |________________________|
          |                   \
-         |                    \  JSON files (data/raw/)
+         |                    \  JSON files
          | CSV files           \   pos_store_sales.json
          | (data/raw/)          \
          | customers.csv         \
@@ -104,16 +101,31 @@ retailflow-pipeline/
          | orders.csv              \
          |                          |
          v                          v
-  .________________________.  ._____________________________.
-  |  CSV INGESTION (Python)|  |  JSON INGESTION (Python)   |
-  |  ┌─ pandas chunksize   |  |  ┌─ json.load → DataFrame  |
-  |  │ Truncate + insert   |  |  │ Truncate + replace      |
-  |  │ Validation guard-   |  |  │ No guardrails (POS      |
-  |  │ rails per entity    |  |  │ data trusted at source) |
-  |  │ PII anonymisation   |  |  │_________________________|
-  |  │ (customers only)    |
-  |  │ DLQ bad rows        |
-  |  │_____________________|
+  ._______________________.  ._____________________________.
+  |  SCHEMA DRIFT CHECK   |  |  For each source file, the  |
+  |  (Layer 0)            |  |  drift detector compares    |
+  |                       |  |  actual columns + dtypes    |
+  |  ┌─ Compare against   |  |  against SCHEMA_BLUEPRINT. |
+  |  │  SCHEMA_BLUEPRINT  |  |                             |
+  |  │                     |  |  CRITICAL: missing column  |
+  |  │  Pass → continue   |  |  or type mismatch. File    |
+  |  │  WARN → extra col  |  |  moved to data/rejected_   |
+  |  │  CRITICAL → halt,  |  |  schemas/. Pipeline halts. |
+  |  │  quarantine file   |  |  Red alert fired.           |
+  |  │____________________|  |_____________________________|
+         |                          |
+         | (pass)                   | (critical)
+         v                          v
+  ._________________________.  .__________________________.
+  |  CSV INGESTION (Python) |  |  SCHEMA QUARANTINE       |
+  |  ┌─ pandas chunksize    |  |  data/rejected_schemas/  |
+  |  │ Truncate + insert    |  |  (file isolated, never   |
+  |  │ Validation guard-    |  |  reaches PostgreSQL)     |
+  |  │ rails per entity     |  |__________________________|
+  |  │ PII anonymisation    |
+  |  │ (customers only)     |
+  |  │ DLQ bad rows         |
+  |  │______________________|
          |            |              |
          | clean      | bad rows     |
          | rows       v              |
@@ -128,10 +140,9 @@ retailflow-pipeline/
          v           v
   .________________________________________.
   │   PostgreSQL raw schema (port 5432)     │
-  │                                         │
   │   raw.customers    raw.orders           │
   │   raw.products     raw.pos_store_sales  │
-  │_________________________________________│
+  |_________________________________________|
          |
          |  Schema Harmonisation
          |  _harmonize_and_upsert_unified()
@@ -140,7 +151,7 @@ retailflow-pipeline/
          |  Adds: source_system ('online' / 'pos')
          v
   .________________________________________.
-  │   raw.unified_transactions              │  NEW
+  │   raw.unified_transactions              │
   │   Primary Key: (transaction_id,         │
   │                 source_system)          │
   │   Upsert: INSERT ... ON CONFLICT        │
@@ -167,44 +178,178 @@ retailflow-pipeline/
   |  (marts schema)        |       Star schema: dims + fact
   |________________________|       Revenue converted to dollars
               |
-              |                  .____________________________________.
-              |                  │   ORCHESTRATION LAYER (Layer 4)    │
-              |                  │   scripts/orchestrate.py           │
-              +----------------> │   1. Generate Data   (.venv)       │
-              |                  │   2. Load PostgreSQL (.venv)       │
-              |                  │   3. dbt Run         (.venv-dbt)   │
-              |                  │   4. dbt Test        (.venv-dbt)   │
-              |                  │   5. Excel Export    (.venv)       │
-              |                  │   6. dbt Docs Gen.   (.venv-dbt)   │  NEW
-              |                  │                                    │
-              |                  │   Circuit breaker: halt on failure │
-              |                  │   Alerts dispatched at key states  │
-              |                  │____________________________________│
-              |                             |           |
-              |                  ┌──────────┴──────────┐ │
-              |                  │                     │ │
-              v                  v                     v v
-  .________________________.    ._____________________________.   .___________________________.
-  |  STREAMLIT DASHBOARD   |    |  EXCEL EXPORTER             |   │  ALERTING ENGINE          │
-  |  (src/dashboard/app.py) |    |  (src/exports/             |   │  scripts/alerts.py         │
-  |  Live KPI monitoring   |    |   excel_exporter.py)        |   │  Discord / Slack webhook   │
-  |  Plotly charts         |    |  4 analytics sheets         |   │  Colour-coded embeds       │
-  |  5-min cache + refresh |    |  Styled .xlsx output        |   │  (green/amber/red)         │
-  |________________________|    |_____________________________|   │  Graceful skip if unset    │
-                                                                  │____________________________│
-                                                                             |
-                                                                  .___________________________.
-                                                                  │  dbt DOCS GENERATE         │
-                                                                  │  dbt docs generate         │
-                                                                  │  Metadata catalog +        │
-                                                                  │  interactive lineage       │
-                                                                  │  graph (make docs to view) │
-                                                                  │____________________________│
+              |        ┌──────────────────────────────────────────────┐
+              |        │         ORCHESTRATION LAYER (Layer 4)        │
+              |        │         scripts/orchestrate.py               │
+              +------->│   1. Generate Data        (.venv)            │
+              |        │   2. Load + Drift Check   (.venv)            │
+              |        │   3. dbt Run              (.venv-dbt)        │
+              |        │   4. dbt Test             (.venv-dbt)        │
+              |        │   5. Excel Export         (.venv)            │
+              |        │   6. dbt Docs Generate    (.venv-dbt)        │
+              |        │   7. Lineage Graph        (.venv)            │
+              |        │   8. Data Profile Report  (.venv)            │
+              |        │                                               │
+              |        │   Circuit breaker: halt on non-zero exit      │
+              |        │   Alerts: DLQ warning, dbt critical, success  │
+              |        │   Schema drift: CRITICAL → halt, WARN → pass  │
+              |        └──────────────────────────────────────────────┘
+              |                    |           |              |
+              |         ┌──────────┴──────────┐ │              |
+              |         │                     │ │              |
+              v         v                     v v              v
+  .________________________.   ._________________________.   .___________________________.
+  |  STREAMLIT DASHBOARD   |   |  EXCEL EXPORTER         |   |  ALERTING ENGINE          |
+  |  (src/dashboard/app.py) |   |  (src/exports/          |   |  scripts/alerts.py         |
+  |  Live KPI monitoring   |   |   excel_exporter.py)     |   │  Discord / Slack webhook   │
+  |  Plotly charts         |   |  4 analytics sheets      |   │  Colour-coded embeds       │
+  |  5-min cache + refresh |   |  Styled .xlsx output     |   │  (green/amber/red)         │
+  |________________________|   |__________________________|   │  Graceful skip if unset    │
+                                                              │  Rich dbt failure metadata │
+                                                              │  Schema drift alerts       │
+                                                              |____________________________|
+                                                                         |
+                                                              .___________________________.
+                                                              |  dbt DOCS CATALOG         │
+                                                              │  dbt docs generate         │
+                                                              │  Metadata catalog +        │
+                                                              │  interactive lineage       │
+                                                              │  graph (make docs to view) │
+                                                              |____________________________|
+                                                                         |
+                                                              .___________________________.
+                                                              |  LINEAGE BLUEPRINT        │
+                                                              │  generate_lineage.py       │
+                                                              │  NetworkX → 200 DPI PNG    │
+                                                              │  docs/lineage/             │
+                                                              |____________________________|
+                                                                         |
+                                                              .___________________________.
+                                                              |  DATA PROFILE REPORT      │
+                                                              │  generate_profiling.py     │
+                                                              │  pandas → interactive HTML │
+                                                              │  docs/profiling/           │
+                                                              |____________________________|
 ```
 
 ---
 
-## 3. Layer 1 — Data Generation (Ingestion)
+## 3. Layer 0 — Schema Drift Detection
+
+**Module:** `scripts/load_to_postgres.py` (built into `main()`)
+
+The schema drift detector runs **before** any data is loaded into PostgreSQL. Each source file is inspected (header row for CSV, first record for JSON) and compared against a `SCHEMA_BLUEPRINT` dictionary that defines expected column names and pandas dtypes for every entity.
+
+### Blueprint Definition
+
+```python
+SCHEMA_BLUEPRINT = {
+    "customers": {
+        "required_columns": {
+            "customer_id": "string", "first_name": "string",
+            "last_name": "string", "email": "string",
+            "country": "string", "city": "string",
+            "signup_date": "string", "age": "int64", "gender": "string",
+        },
+    },
+    "products": {
+        "required_columns": {
+            "product_id": "string", "name": "string",
+            "category": "string", "price_cents": "int64",
+            "stock_quantity": "int64", "supplier_country": "string",
+        },
+    },
+    "orders": {
+        "required_columns": {
+            "order_id": "string", "customer_id": "string",
+            "product_id": "string", "quantity": "int64",
+            "order_date": "string", "status": "string",
+            "discount_pct": "int64", "shipping_days": "int64",
+        },
+    },
+    "pos_store_sales": {
+        "required_columns": {
+            "sale_id": "string", "store_id": "string",
+            "product_id": "string", "quantity": "int64",
+            "unit_price_cents": "int64", "total_amount": "int64",
+            "transaction_timestamp": "string", "payment_method": "string",
+        },
+    },
+}
+```
+
+### Drift Severity Levels
+
+| Severity | Condition | Action | Alert |
+|----------|-----------|--------|-------|
+| **CRITICAL** | Required column missing, or pandas dtype does not match blueprint (after normalisation) | File moved to `data/rejected_schemas/`. Pipeline halts with exit code 2. | Red embed sent to webhook listing the entity, missing columns, and type mismatches. |
+| **WARNING** | Extra columns present that are not in the blueprint | Pipeline continues. Extra columns logged. | Amber embed sent with the entity and extra column names. |
+| **NONE** | Schema matches blueprint exactly | Normal processing proceeds. | — |
+
+### Drift Decision Tree
+
+```
+                     Read first row of source file
+                               │
+                    ┌──────────┴──────────┐
+                    ▼                     ▼
+           ┌────────────────┐   ┌─────────────────┐
+           │ Missing        │   │ All required     │
+           │ required cols  │   │ columns present  │
+           └───────┬────────┘   └─────────┬────────┘
+                   │                      │
+                   │              ┌───────┴───────┐
+                   │              ▼               ▼
+                   │     ┌──────────────┐  ┌──────────────┐
+                   │     │ Type         │  │ Types match  │
+                   │     │ mismatch     │  │              │
+                   │     └──────┬───────┘  └──────┬───────┘
+                   │            │                  │
+                   │            │          ┌───────┴───────┐
+                   │            │          ▼               ▼
+                   │            │  ┌──────────────┐  ┌──────────────┐
+                   │            │  │ Extra cols   │  │ Exact match  │
+                   │            │  │ present      │  │              │
+                   │            │  └──────┬───────┘  └──────┬───────┘
+                   │            │         │                  │
+                   ▼            ▼         ▼                  ▼
+             ┌──────────┐ ┌──────────┐ ┌──────────┐  ┌──────────┐
+             │Critical  │ │Critical  │ │Warning   │  │Pass      │
+             │Halt      │ │Halt      │ │Continue  │  │Continue  │
+             │Quarantine│ │Quarantine│ │Amber     │  │No alert  │
+             │Red alert │ │Red alert │ │alert     │  │          │
+             └──────────┘ └──────────┘ └──────────┘  └──────────┘
+```
+
+### Dtype Normalisation
+
+pandas dtype strings vary across versions and platforms (e.g. `"string"` vs `"str"` vs `"object"`). The drift detector normalizes all dtypes before comparison:
+
+| Raw dtype | Normalised |
+|-----------|------------|
+| `"string"`, `"str"`, `"object"` | `"string"` |
+| `"int64"`, `"Int64"`, `"int32"` | `"int64"` |
+| `"float64"`, `"Float64"`, `"float32"` | `"float64"` |
+| `"bool"`, `"boolean"` | `"bool"` |
+
+### Orchestrator Integration
+
+When `load_to_postgres.py` detects critical drift, it prints a `SCHEMA_DRIFT_CRITICAL:` JSON line and exits with code 2. The orchestrator parses these markers from the captured subprocess output:
+
+```
+SCHEMA_DRIFT_CRITICAL:{"entity": "customers", "severity": "critical",
+  "filepath": "...", "missing_columns": ["age"], "type_mismatches": {}}
+```
+
+The orchestrator logs the event, dispatches a red alert, and halts subsequent steps. Warning drift is logged and alerted but does not halt the pipeline.
+
+### Health Check Integration
+
+`scripts/project_status.py` checks `data/rejected_schemas/` for quarantined files. If any exist, the status report shows a `FAIL` status with the file names and a fix hint pointing to `SCHEMA_BLUEPRINT`.
+
+---
+
+## 4. Layer 1 — Data Generation (Ingestion)
 
 ### Synthetic Data Engine — `scripts/generate_fake_data.py`
 
@@ -212,29 +357,30 @@ retailflow-pipeline/
 
 **Scale Profiles (CLI-driven):**
 
-| Profile  | `--profile` | Customers | Products | Orders   | Runtime (approx) |
-|----------|-------------|-----------|----------|----------|------------------|
-| Small    | `small`     | 1,000     | 100      | 10,000   | ~2 seconds       |
-| Medium   | `medium`    | 10,000    | 500      | 100,000  | ~15 seconds      |
-| Large    | `large`     | 100,000   | 5,000    | 1,000,000| ~3 minutes       |
+| Profile | `--profile` | Customers | Products | Orders | POS Sales | Runtime (approx) |
+|---------|-------------|-----------|----------|--------|-----------|------------------|
+| Small | `small` | 1,000 | 100 | 10,000 | 3,000 | ~2 seconds |
+| Medium | `medium` | 10,000 | 500 | 100,000 | 30,000 | ~15 seconds |
+| Large | `large` | 100,000 | 5,000 | 1,000,000 | 300,000 | ~3 minutes |
 
 **Resolution order:** `--profile` sets defaults → explicit `--customers` / `--products` / `--orders` / `--pos-sales` flags override individual dimensions.
 
 **Output:** 4 files written to `data/raw/`:
 - `customers.csv` — UUID, name, email (guaranteed unique), country, city, signup_date, age, gender
-- `products.csv` — UUID, name, category (weighted: Clothing 35%, Electronics 25%, Home 25%, Food 15%), price_cents, stock, supplier_country
+- `products.csv` — UUID, name, category (weighted), price_cents, stock_quantity, supplier_country
 - `orders.csv` — UUID, FK→customers, FK→products, quantity, order_date, status (completed 80%, returned 10%, pending 10%), discount_pct, shipping_days
-- `pos_store_sales.json` — POS terminal sales from physical stores (JSON): `sale_id`, `store_id`, `product_id`, `quantity`, `unit_price_cents`, `total_amount`, `transaction_timestamp`, `payment_method`
+- `pos_store_sales.json` — sale_id, store_id, product_id, quantity, unit_price_cents, total_amount, transaction_timestamp, payment_method
 
 ### Hybrid Ingestion Engine — `scripts/load_to_postgres.py`
 
 **Purpose:** Ingest both CSV (e-commerce) and JSON (POS store) source files into the PostgreSQL `raw` schema, then run schema harmonisation to produce a unified transactions table.
 
 **Behavior:**
+- Validates schema drift against `SCHEMA_BLUEPRINT` **before** loading each file (see Layer 0)
 - Creates `raw` schema if missing (`CREATE SCHEMA IF NOT EXISTS`)
 - Truncates each target table before loading (idempotent)
 - CSV files use `pandas.read_csv(chunksize=10_000)` + validation guardrails + `to_sql(method="multi")`
-- JSON files use `json.load()` → `pd.DataFrame()` → `to_sql(if_exists="replace")` (POS data is trusted at source; no guardrail checks)
+- JSON files use `json.load()` → `pd.DataFrame()` → `to_sql(if_exists="replace")`
 - Column types: UUIDs as `string`, dates as `string` (cast later in dbt)
 
 **Data Quality Guardrails (per entity):**
@@ -246,39 +392,37 @@ retailflow-pipeline/
 | Orders | `order_id`/`customer_id`/`product_id` not null, `quantity >= 0`, `discount_pct` in `[0, 100]` | `missing order_id`, `missing customer_id`, `missing product_id`, `negative quantity`, `discount_pct out of range` |
 
 **Dead Letter Queue (DLQ):**
-- Bad rows are **not** silently dropped — they are isolated to `data/rejected/`
-- Each rejected row gets a `rejection_reason` column describing the violation
-- DLQ files are timestamped (`rejected_orders_20260707_033908.csv`) to prevent collisions across runs
+- Bad rows are isolated to `data/rejected/` with a `rejection_reason` column
+- DLQ files are timestamped (`rejected_orders_20260707_033908.csv`)
 - The pipeline continues normally; only clean rows reach PostgreSQL
-- The orchestrator captures and logs the loaded vs. rejected count at the end of the ingestion step
+- The orchestrator captures and logs the loaded vs. rejected count
 
 **PII Anonymization (GDPR / CCPA Compliance):**
-- Before writing customer rows to the database, the `first_name`, `last_name`, and `email` columns are SHA-256 hashed for privacy compliance
-- The hashing is deterministic: each value is stripped of whitespace, lowercased, then hashed — so the same real name always maps to the same hash (useful for joins without exposing PII)
-- Null values are preserved as-is; the pipeline never crashes on missing data
-- The transformation happens in `_anonymize_pii()` right after validation and before the SQL insert — only clean customer rows are anonymized
-- The raw CSV files on disk remain unmodified; only the database copy is obfuscated
+- `first_name`, `last_name`, and `email` are SHA-256 hashed before storage
+- Hashing is deterministic: whitespace-stripped, lowercased, then hex-digested
+- Null values preserved as-is
+- Raw CSV files on disk remain unmodified
 
 **Schema Harmonisation & Unified Upsert:**
 - After all raw source tables are loaded, `_harmonize_and_upsert_unified()` creates (if missing) and populates `raw.unified_transactions`
-- This table merges **online orders** (`raw.orders`) and **POS store sales** (`raw.pos_store_sales`) into a single schema-aligned table
-- **Column mapping:**
-  | Unified Column | Online Source | POS Source |
-  |---|---|--|
-  | `transaction_id` | `order_id` | `sale_id` |
-  | `source_system` | `'online'` | `'pos'` |
-  | `transaction_date` | `order_date` | `transaction_timestamp::date` |
-  | `total_amount` | `NULL` (computed in dbt) | `total_amount` |
-  | `store_id` | `NULL` | `store_id` |
-  | `customer_id` | `customer_id` | `NULL` |
-  | `status` | `status` | `'completed'` |
-  | `payment_method` | `NULL` | `payment_method` |
+- Column mapping:
+
+| Unified Column | Online Source | POS Source |
+|---|---|---|
+| `transaction_id` | `order_id` | `sale_id` |
+| `source_system` | `'online'` | `'pos'` |
+| `transaction_date` | `order_date` | `transaction_timestamp::date` |
+| `total_amount` | `NULL` (computed in dbt) | `total_amount` |
+| `store_id` | `NULL` | `store_id` |
+| `customer_id` | `customer_id` | `NULL` |
+| `status` | `status` | `'completed'` |
+| `payment_method` | `NULL` | `payment_method` |
+
 - Uses `INSERT ... ON CONFLICT (transaction_id, source_system) DO UPDATE` for idempotent re-runs
-- The `source_system` discriminator (`'online'` / `'pos'`) enables downstream analytics to filter or compare channels
 
 ---
 
-## 4. Layer 2 — PostgreSQL Warehouse (Storage)
+## 5. Layer 2 — PostgreSQL Warehouse (Storage)
 
 **Infrastructure:** PostgreSQL 15 running in Docker via `docker-compose.yml`.
 
@@ -288,7 +432,6 @@ retailflow-pipeline/
 | Database | `retailflow` |
 | User | `retailflow_user` |
 | Password | `retailflow_pass` (from `.env`) |
-| Port | 5432 (mapped to host) |
 
 **Schema layout after full pipeline run:**
 
@@ -297,8 +440,8 @@ raw          (schema)  — 5 tables, loaded by load_to_postgres.py
 ├── customers
 ├── products
 ├── orders
-├── pos_store_sales        (JSON-origin POS data)
-└── unified_transactions   (harmonised merge of orders + pos)
+├── pos_store_sales
+└── unified_transactions
 
 staging      (schema)  — 3 views, created by dbt
 ├── stg_customers
@@ -316,9 +459,9 @@ marts        (schema)  — 3 tables, created by dbt
 
 ---
 
-## 5. Layer 3 — dbt Transformation (Processing)
+## 6. Layer 3 — dbt Transformation (Processing)
 
-**Environment:** Isolated `.venv-dbt` — only `dbt-core==1.7.14` + `dbt-postgres==1.7.14` installed. This avoids the `mashumaro` version conflict with other packages (Airflow, Great Expectations).
+**Environment:** Isolated `.venv-dbt` — only `dbt-core==1.7.14` + `dbt-postgres==1.7.14`.
 
 ### Staging Models (`models/staging/`)
 
@@ -328,13 +471,13 @@ marts        (schema)  — 3 tables, created by dbt
 | `stg_products` | `raw.products` | Trim name/category, filter `price_cents <= 0`, deduplicate |
 | `stg_orders` | `raw.orders` | Cast order_date to DATE, lowercase/trim status, filter null FKs, deduplicate |
 
-**Materialization:** Views (lightweight, no storage).
+**Materialization:** Views.
 
 ### Intermediate Model (`models/intermediate/`)
 
 | Model | Source | Transformations |
 |-------|--------|----------------|
-| `int_orders_enriched` | All 3 staging models | LEFT JOIN orders customers products, compute `gross_revenue_cents` and `net_revenue_cents` |
+| `int_orders_enriched` | All 3 staging models | LEFT JOIN orders + customers + products, compute `gross_revenue_cents` and `net_revenue_cents` |
 
 **Materialization:** View.
 
@@ -344,17 +487,17 @@ marts        (schema)  — 3 tables, created by dbt
 |-------|------|-------|-------------|
 | `dim_customers` | Dimension | 1 row per customer | `total_orders`, `lifetime_value_cents` |
 | `dim_products` | Dimension | 1 row per product | `total_orders`, `total_units_sold`, `total_revenue_cents` |
-| `fct_orders` | Fact | 1 row per order line | `gross_revenue_dollars`, `net_revenue_dollars` (via `cents_to_dollars()` macro) |
+| `fct_orders` | Fact | 1 row per order line | `gross_revenue_dollars`, `net_revenue_dollars` |
 
 **Materialization:**
-- `dim_customers`, `dim_products` — **table** (full refresh each run; small, stable dimension data)
-- `fct_orders` — **incremental** (only new/changed order dates are processed; avoids re-processing the full order history)
+- `dim_customers`, `dim_products` — **table** (full refresh each run)
+- `fct_orders` — **incremental** with `unique_key='order_id'`
 
 **`fct_orders` Incremental Strategy:**
-- `unique_key: order_id` enables Upsert semantics (dbt `MERGE` on PostgreSQL): existing rows are updated, new rows are inserted
-- The `{% if is_incremental() %}` block filters the source CTE to `WHERE order_date >= (SELECT MAX(order_date) FROM {{ this }})`, so each run processes only the latest batch of orders
-- On the **first run** (empty target table), the `is_incremental()` block is skipped and all historical data is loaded — subsequent runs are lightweight
-- This drastically reduces runtime as `fct_orders` grows: a full refresh over millions of rows is replaced by a single-day incremental scan
+- `unique_key: order_id` enables UPSERT semantics (`MERGE` on PostgreSQL)
+- `{% if is_incremental() %}` filters to `WHERE order_date >= (SELECT MAX(order_date) FROM {{ this }})`
+- First run (empty target) loads all historical data
+- Subsequent runs are lightweight single-day scans
 
 ### dbt Tests
 
@@ -367,66 +510,57 @@ marts        (schema)  — 3 tables, created by dbt
 
 ---
 
-## 6. Layer 4 — Orchestration Layer
+## 7. Layer 4 — Orchestration Layer
 
 **Script:** `scripts/orchestrate.py`
 
-The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG with 6 steps:
+The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG with 8 steps:
 
 ```
-[1] Generate Data  ──> [2] Load PostgreSQL  ──> [3] dbt Run  ──> [4] dbt Test  ──> [5] Excel Export  ──> [6] dbt Docs
-
-  (.venv)                (.venv)               (.venv-dbt)      (.venv-dbt)       (.venv)            (.venv-dbt)
+[1] Generate Data   ──> [2] Load PostgreSQL  ──> [3] dbt Run  ──> [4] dbt Test
+       (.venv)              (.venv)               (.venv-dbt)      (.venv-dbt)
+                                                       │
+                                                       v
+[5] Excel Export   ──> [6] dbt Docs Gen   ──> [7] Lineage Graph ──> [8] Profile Report
+      (.venv)              (.venv-dbt)            (.venv)              (.venv)
 ```
 
 ### Key Design Decisions
 
 | Concern | Implementation |
 |---------|---------------|
-| **Environment switching** | Each step resolves the correct executable: `.venv\Scripts\python.exe` for steps 1, 2, 5; `.venv-dbt\Scripts\dbt.exe` for steps 3, 4, 6 |
-| **Circuit breaker** | `subprocess.Popen` runs each step; non-zero `returncode` triggers `sys.exit(1)` before proceeding to the next step |
-| **Streaming output** | `stdout=subprocess.PIPE` with real-time line-by-line printing so the user sees progress as it happens |
-| **Run duration** | Each step is timed with `time.monotonic()`; total pipeline time is printed on completion |
-| **Profile propagation** | `--profile` is parsed at the orchestrator level and forwarded to `generate_fake_data.py` |
-| **DLQ summary capture** | Step 2 output is scanned for a `DLQ_SUMMARY:` JSON line; orchestrator logs loaded vs. rejected counts per table |
-| **dbt step splitting** | `dbt run` is split into 3 sub-steps (`staging`, `intermediate`, `marts`) with individual failure handling |
-| **Alerting hooks** | Warning on DLQ rejection > 0, critical on dbt test failure, success recap on completion all dispatched via `scripts/alerts.py` |
-| **Metadata docs** | Step 6 runs `dbt docs generate` inside `.venv-dbt` to produce the interactive catalog and lineage graph |
+| **Environment switching** | Each step resolves the correct executable: `_py_exe()` for `.venv`, `_dbt_exe()` for `.venv-dbt` |
+| **Circuit breaker** | Non-zero `returncode` → `sys.exit(1)` before proceeding. Exit code 2 = schema drift halt |
+| **Streaming output** | `subprocess.PIPE` with real-time line-by-line printing |
+| **Step timing** | `time.monotonic()` per step; total pipeline time on completion |
+| **Profile propagation** | `--profile` forwarded to `generate_fake_data.py` |
+| **DLQ summary capture** | Step 2 output scanned for `DLQ_SUMMARY:` JSON line |
+| **dbt step splitting** | `dbt run` split into 3 sub-steps (`staging`, `intermediate`, `marts`) with individual failure handling |
+| **Schema drift markers** | Step 2 output scanned for `SCHEMA_DRIFT_CRITICAL:` and `SCHEMA_DRIFT_WARNING:` JSON lines |
+| **Alerting hooks** | DLQ warning, schema drift critical/warning, dbt test critical, success recap — all dispatched via `scripts/alerts.py` |
 
-### Usage
+### Pre-Flight Health Checks
 
-```bash
-# Single unified command (default medium profile)
-python scripts/orchestrate.py
+Before executing any step, `_run_preflight_checks()` validates:
 
-# Fast testing with small profile
-python scripts/orchestrate.py --profile small
-
-# Via Make shortcut
-make pipeline
-
-# Launch the dbt metadata portal (after pipeline)
-make docs
-```
+| Check | What it validates |
+|-------|-------------------|
+| Critical directories | `data/raw/`, `dbt/`, `dbt/models/`, `dbt/target/`, `scripts/`, `src/` |
+| dbt virtual environment | `.venv-dbt/Scripts/dbt.exe` (Win) or `.venv-dbt/bin/dbt` (Linux) |
 
 ### CLI Reference
 
-```
-usage: orchestrate.py [-h] [--profile {small,medium,large}]
-
-options:
-  -h, --help            Show help message
-  --profile {small,medium,large}
-                        Scale profile passed to the data generator (default: medium)
+```bash
+python scripts/orchestrate.py [--profile {small,medium,large}]
+make pipeline
+make pipeline profile=small
 ```
 
 ---
 
-## 7. Layer 5 — Consumption Layer (Business-Facing)
+## 8. Layer 5 — Consumption Layer (Business-Facing)
 
-### 7.1 Streamlit Dashboard — `src/dashboard/app.py`
-
-**Purpose:** Real-time KPI monitoring for business stakeholders.
+### 8.1 Streamlit Dashboard — `src/dashboard/app.py`
 
 **Architecture:**
 ```
@@ -439,75 +573,55 @@ Browser ← HTTP/WS ← Streamlit Server ← SQLAlchemy ← PostgreSQL
                     └───────────┘
 ```
 
-**Key design decisions:**
-
-| Concern | Implementation |
-|---------|---------------|
-| Data freshness | `@st.cache_data(ttl=300)` — auto-refreshes every 5 minutes |
-| Connectivity | `@st.cache_resource` for the SQLAlchemy engine (singleton) |
-| dbt-missing resilience | `_safe_query()` catches `UndefinedTable` → shows `st.warning()` + expandable traceback |
-| Charts | Plotly Express (`px.line`, `px.bar`) — interactive hover, zoom, unified tooltips |
-| Auto-refresh | Sidebar checkbox + `st.rerun(ttl=interval_ms)` |
-| Export trigger | Sidebar button → `subprocess.run([sys.executable, "-m", "src.exports.excel_exporter"])` |
-
-**Dashboard sections:**
-1. **Sidebar** — Refresh button, auto-refresh toggle, category filter, Export to Excel, data freshness timestamp
+**Sections:**
+1. **Sidebar** — Refresh button, auto-refresh toggle, category filter, Export to Excel
 2. **KPI row** — Total Orders, Total Net Revenue, Active Customers, Avg Order Value, Returned/Pending, Return Rate %
-3. **Monthly Sales Trend** — Plotly line chart (revenue + orders over time)
-4. **Category Performance** — Grouped bar chart (revenue + units by category)
-5. **Revenue by Country** — Horizontal bar chart, colored by customer count (top 15)
-6. **Top 10 Customers** — Data table with formatted revenue
+3. **Monthly Sales Trend** — Plotly line chart
+4. **Category Performance** — Grouped bar chart
+5. **Revenue by Country** — Horizontal bar chart (top 15)
+6. **Top 10 Customers** — Data table
 
-### 7.2 Excel Analytics Exporter — `src/exports/excel_exporter.py`
+### 8.2 Excel Analytics Exporter — `src/exports/excel_exporter.py`
 
-**Purpose:** Generate executive-ready `.xlsx` files for offline analysis.
+| Sheet | SQL Query Source |
+|-------|-----------------|
+| Top Customers | `marts.dim_customers` — top 10 by `SUM(net_revenue_dollars)` |
+| Monthly Sales | MoM revenue and order counts |
+| Category Performance | Revenue share % per category |
+| Cohort Analysis | Customer retention by first-purchase month |
 
-**Queries executed against `marts` schema:**
-
-| Sheet | SQL Query |
-|-------|-----------|
-| Top Customers | Top 10 customers by `SUM(net_revenue_dollars)` |
-| Monthly Sales | Monthly `COUNT(orders)`, `SUM(revenue)`, MoM growth % |
-| Category Performance | Revenue, units sold, revenue share % per category |
-| Cohort Analysis | Customer retention and spending by first-purchase month |
-
-**Styling:**
-- Dark blue header fill (`1F4E79`) with white bold font
-- Auto-fitted column widths
-- Currency format (`$#,##0.00`) on revenue columns
-- Timestamped filename: `retail_analytics_YYYYMMDD_HHMMSS.xlsx`
-
-**Output:** Written to `outputs/` directory (gitignored).
+**Styling:** Dark blue headers (`1F4E79`), auto-fitted columns, currency format (`$#,##0.00`), timestamped filename.
 
 ---
 
-## 8. Quality Guardrails — CI/CD Pipeline
+## 9. Quality Guardrails — CI/CD Pipeline
 
 **File:** `.github/workflows/ci_cd.yml`
 
 ```
-                    ┌─────────────────────────────────────┐
-                    │         GitHub Actions               │
-                    │                                      │
-                    │  Push / PR to main/master            │
-                    │         │                            │
-                    │    ┌────┴────┐                       │
-                    │    │         │                       │
-                    │    ▼         ▼                       │
-                    │  ┌────┐  ┌────┐                      │
-                    │  │Core│  │dbt │                      │
-                    │  │Py  │  │Val │                      │
-                    │  └─┬──┘  └─┬──┘                      │
-                    │    │       │                         │
-                    │    ▼       ▼                         │
-                    │  ┌────┐  ┌────┐                      │
-                    │  │flake8│  │dbt │                     │
-                    │  │py test│ │debug│                    │
-                    │  │77 tests│ │parse│                   │
-                    │  └────┘  └────┘                      │
-                    │                                      │
-                    │  PostgreSQL 15 (service)             │
-                    └─────────────────────────────────────┘
+                    ┌──────────────────────────────────────────────────┐
+                    │              GitHub Actions                      │
+                    │                                                  │
+                    │         Push / PR to main/master                 │
+                    │                    │                             │
+                    │              ┌─────┴─────┐                       │
+                    │              │           │                       │
+                    │              ▼           ▼                       │
+                    │         ┌────────┐ ┌────────┐                    │
+                    │         │ Core   │ │ dbt    │                    │
+                    │         │ Python │ │ Val.   │                    │
+                    │         └───┬────┘ └───┬────┘                    │
+                    │             │          │                         │
+                    │             ▼          ▼                         │
+                    │       ┌─────────┐ ┌─────────┐                    │
+                    │       │ flake8  │ │dbt debug│                    │
+                    │       │ black   │ │dbt parse│                    │
+                    │       │ pytest  │ │         │                    │
+                    │       │ 77 tests│ │         │                    │
+                    │       └─────────┘ └─────────┘                    │
+                    │                                                  │
+                    │   PostgreSQL 15 service container (shared)       │
+                    └──────────────────────────────────────────────────┘
 ```
 
 ### Job 1 — Core Python (Lint & Test)
@@ -516,167 +630,79 @@ Browser ← HTTP/WS ← Streamlit Server ← SQLAlchemy ← PostgreSQL
 |------|------|-------------------|
 | 1 | `actions/checkout@v4` | Pulls the repo |
 | 2 | `actions/setup-python@v5` | Python 3.12, pip cache |
-| 3 | `pip install -r requirements.txt` | Installs pandas, pytest, openpyxl, streamlit, flake8, black |
-| 4 | `flake8` | Code style (unused imports, undefined variables) — exits non-zero on violations |
-| 5 | `black --check` | Formatting consistency — continues on warning (non-blocking) |
-| 6 | `pytest` | 77+ unit tests — mocks external DB, validates business logic |
+| 3 | `pip install -r requirements.txt` | Installs all main deps |
+| 4 | `flake8` | Code style (ignores E501, W503) |
+| 5 | `black --check` | Formatting consistency |
+| 6 | `pytest` | 77+ unit tests |
 
 ### Job 2 — dbt Validation
 
 | Step | Tool | What it validates |
 |------|------|-------------------|
-| 1 | `pip install dbt-core==1.7.14 dbt-postgres==1.7.14` | Simulates `.venv-dbt` isolation |
-| 2 | `CREATE SCHEMA raw` | Creates source tables for dbt to reference |
-| 3 | `dbt debug` | Connection test — verifies `profiles.yml` + pg reachable |
-| 4 | `dbt parse` | SQL compilation — validates all models, refs, sources, and macros |
-
-**PostgreSQL service container:** Both jobs share a temporary Postgres 15 container (`postgres:15`) with health checks, so dbt commands have a live database to connect to.
+| 1 | `pip install dbt-core dbt-postgres` | Simulates `.venv-dbt` isolation |
+| 2 | `CREATE SCHEMA raw` | Creates source tables |
+| 3 | `dbt debug` | Connection test |
+| 4 | `dbt parse` | SQL compilation — validates all models, refs, sources, macros |
 
 ---
 
-## 9. Containerization & Deployment
-
-The project is fully containerized via Docker Compose with two core services:
+## 10. Containerization & Deployment
 
 | Service | Container | Base Image | Purpose |
 |---------|-----------|------------|---------|
 | `db` | `retailflow-db` | `postgres:15-alpine` | PostgreSQL warehouse with `pg_isready` healthcheck |
-| `app` | `retailflow-app` | `python:3.12-slim` (via `Dockerfile`) | Streamlit dashboard + ETL orchestration |
+| `app` | `retailflow-app` | `python:3.12-slim` (via `Dockerfile`) | Streamlit dashboard + ETL pipeline |
 | `pgadmin` | `retailflow-pgadmin` | `dpage/pgadmin4:latest` | Web-based PostgreSQL admin (optional) |
 
 ### Dockerfile Architecture
 
-The `Dockerfile` uses four logical layers for optimal caching:
-
 ```
 Layer 1: System deps (gcc, libpq-dev, curl)
-         └── RUN apt-get install ...
-Layer 2: Core Python deps (pandas, streamlit, airflow, GE, ...)
-         └── RUN pip install ...
-Layer 3: Isolated dbt venv (/opt/dbt-venv)
-         └── dbt-core==1.7.14 + dbt-postgres==1.7.14
+Layer 2: Core Python deps (pandas, streamlit, airflow, GE, networkx, requests, ...)
+Layer 3: Isolated dbt venv (/opt/dbt-venv) — dbt-core + dbt-postgres
 Layer 4: Application code (scripts/, src/, dbt/, tests/)
 ```
 
-**Why an isolated dbt venv?** `dbt-core` 1.7.x pins `mashumaro<4` while Airflow and Great Expectations require `mashumaro>=4`. Installing dbt in a separate venv with a symlink into `PATH` avoids the conflict while keeping both runtimes accessible.
+### Deployment Runbook
 
-### Cross-Platform Orchestrator
+```bash
+# Build & launch
+docker compose up --build
 
-The `_dbt_exe()` and `_py_exe()` functions in `scripts/orchestrate.py` now detect the platform:
+# Access dashboard: http://localhost:8501
+# Access pgAdmin:  http://localhost:5050
+
+# Run pipeline inside container
+docker exec -it retailflow-app python scripts/orchestrate.py --profile small
+
+# Tear down
+docker compose down
+docker compose down -v  # ⚠️ destroys data volumes
+```
+
+---
+
+## 11. Virtual Environment Strategy
+
+| Environment | Location | Contents | When to use |
+|-------------|----------|----------|-------------|
+| **Main** | `.venv/` | pandas, SQLAlchemy, streamlit, plotly, openpyxl, pytest, flake8, black, Faker, Airflow, GE, requests, networkx, matplotlib | Data generation, loading, dashboard, Excel export, testing, lineage, profiling |
+| **dbt** | `.venv-dbt/` | `dbt-core==1.7.14`, `dbt-postgres==1.7.14` | All `dbt` commands (run, test, debug, parse, docs generate) |
+
+**Why two envs?** `dbt-core` pins `mashumaro<4` while Airflow and Great Expectations require `mashumaro>=4`. A single environment cannot satisfy both.
+
+Cross-platform resolution in the orchestrator:
 
 | Platform | `_py_exe()` | `_dbt_exe()` |
 |----------|-------------|--------------|
 | Windows (local) | `.venv\Scripts\python.exe` | `.venv-dbt\Scripts\dbt.exe` |
-| Linux (container) | `sys.executable` | `$DBT_EXECUTABLE` env var (→ `/opt/dbt-venv/bin/dbt`) |
-
-### Pre-Flight Health Checks
-
-Before executing any pipeline step, the orchestrator runs a programmatic validation block (`_run_preflight_checks()`) that confirms structural readiness:
-
-| Check | What it validates | Failure message |
-|-------|-------------------|-----------------|
-| **Critical directories** | `data/raw/`, `dbt/`, `dbt/models/`, `dbt/target/`, `scripts/`, `src/` | "The following required directories are missing: …" |
-| **dbt virtual environment** | `.venv-dbt/Scripts/dbt.exe` (Win) or `.venv-dbt/bin/dbt` (Linux) | "dbt virtual environment not found at … Run `make setup-dbt` to create it." |
-
-If any check fails, the orchestrator logs a `CRITICAL` message and exits with code 1 **before** any data is generated or loaded — preventing silent failures or confusing "module not found" errors mid-pipeline.
-
-### Network Configuration
-
-Inside the Docker network, the database is reachable as `db` (the Compose service name). The `app` service receives `POSTGRES_HOST: db` via its `environment` block, overriding the `.env` default of `localhost`. All Python connection helpers (`get_engine()`) read from env vars at runtime, so they adapt automatically — no code changes needed.
-
-### Deployment Runbook
-
-**Prerequisites:**
-- Docker Engine 24+ and Docker Compose v2 installed
-- Ports 5432, 8501, 5050 free on the host
-
-**Step 1 — Build & Launch (single command):**
-
-```bash
-docker compose up --build
-```
-
-This single command:
-1. Builds the `app` image from the Dockerfile
-2. Pulls `postgres:15-alpine` and `dpage/pgadmin4:latest`
-3. Starts `db` first (with 15s grace period healthcheck)
-4. Starts `app` only after `db` reports healthy
-5. Starts `pgadmin` after `db` is healthy
-6. Mounts volumes for persistent data
-7. Maps ports: 5432 (Postgres), 8501 (Streamlit), 5050 (pgAdmin)
-
-**Step 2 — Access the Dashboard:**
-
-Open [http://localhost:8501](http://localhost:8501) in your browser. The Streamlit dashboard connects to the containerized PostgreSQL via the `db` hostname automatically.
-
-**Step 3 — Run the Full Pipeline inside the Container:**
-
-```bash
-# Exec into the running app container
-docker exec -it retailflow-app python scripts/orchestrate.py --profile small
-
-# Or override the default CMD at launch:
-docker compose run --rm app python scripts/orchestrate.py --profile small
-```
-
-**Step 4 — Tear Down:**
-
-```bash
-docker compose down          # Stop containers
-docker compose down -v       # Stop + delete volumes (⚠️ destroys data)
-```
-
-### Service Dependency Graph
-
-```
-docker compose up --build
-        │
-        ▼
-    ┌──────┐
-    │  db  │  (postgres:15-alpine, port 5432)
-    │      │  healthcheck: pg_isready
-    └──┬───┘
-       │ condition: service_healthy
-       ├──────────────────┐
-       ▼                  ▼
-   ┌──────┐         ┌──────────┐
-   │ app  │         │ pgadmin  │
-   │port  │         │ port     │
-   │ 8501 │         │ 5050     │
-   └──────┘         └──────────┘
-```
+| Linux (container) | `sys.executable` | `$DBT_EXECUTABLE` env var |
 
 ---
 
-## 10. Virtual Environment Strategy
-
-The project uses **two independent Python virtual environments** to isolate conflicting dependency chains.
-
-| Environment | Location | Contents | When to use |
-|-------------|----------|----------|-------------|
-| **Main** | `.venv/` | pandas, SQLAlchemy, streamlit, plotly, openpyxl, pytest, flake8, black, Faker, Airflow, Great Expectations | Data generation, loading, dashboard, Excel export, testing |
-| **dbt** | `.venv-dbt/` | `dbt-core==1.7.14`, `dbt-postgres==1.7.14` | All `dbt` commands (run, test, debug, parse) |
-
-**Why two envs?** `dbt-core` pins `mashumaro<4` while Airflow and Great Expectations require `mashumaro>=4`. A single environment cannot satisfy both. The Makefile, orchestrator, and CI/CD workflow all respect this split.
-
-**Makefile reference:**
-```bash
-make setup            # Creates .venv + installs all deps
-make setup-dbt        # Creates .venv-dbt + installs dbt
-make dbt-run          # Uses .venv-dbt\Scripts\dbt
-make dbt-test         # Uses .venv-dbt\Scripts\dbt
-make dashboard        # Uses .venv\Scripts\streamlit
-make export           # Uses .venv\Scripts\python -m src.exports.excel_exporter
-make pipeline         # Uses .venv\Scripts\python scripts\orchestrate.py
-```
-
----
-
-## 11. Layer 6 — Observability & Alerting
+## 12. Layer 6 — Observability & Alerting
 
 **Script:** `scripts/alerts.py`
-
-The alerting engine provides real-time observability by dispatching colour-coded messages to a **Discord** or **Slack** webhook at key pipeline states. It integrates directly into the orchestrator's circuit breaker and DLQ guardrail.
 
 ### Architecture
 
@@ -693,135 +719,76 @@ Pipeline Event ──> orchestrator ──> send_pipeline_alert() / send_dbt_tes
                                          │
                                     requests.post()
                                     (timeout=15s,
-                                     response body
-                                     logged on failure)
+                                     trust_env=True
+                                     for proxy support)
                                          │
                                     ┌────┴────┐
                                     │         │
                                     ▼         ▼
                                HTTP 2xx   HTTP 4xx/5xx
-                               (logged)   (logged + False)
+                               (logged)   (logged + fallback
+                                           plain-text attempt)
 ```
 
 ### Alert Triggers
 
-| Status | Colour  | When |
-|--------|---------|------|
-| `success`  | Green  | All 6 steps complete successfully |
-| `warning`  | Amber  | Ingestion finishes with DLQ rejected rows > 0 |
-| `critical` | Red    | dbt tests fail (circuit breaker fires) |
+| Status | Colour | When | Payload |
+|--------|--------|------|---------|
+| `success` | Green | All 8 steps complete | Total steps, duration, DLQ count |
+| `warning` | Amber | DLQ rejected rows > 0 | Loaded / Rejected / Rejection Rate % |
+| `warning` | Amber | Schema drift: extra columns | Entity name, extra column list |
+| `critical` | Red | Any step fails (circuit breaker) | Stage name, exit code, error message |
+| `critical` | Red | Schema drift: missing/type mismatch | Entity name, missing columns, type mismatches |
+| `critical` | Red | dbt test failure | Per-test unique_id, status, execution_time, DB message |
 
 ### dbt Test Metadata Alerting
 
-When dbt data quality tests fail, the orchestrator dispatches a **rich, metadata-rich alert** that goes beyond a simple exit-code notification:
+When dbt tests fail, the orchestrator:
 
-1. **`parse_dbt_test_results()`** (`scripts/alerts.py`) reads `dbt/target/run_results.json` immediately after the `dbt test` command exits
-2. Every result with `status == "fail"` or `status == "error"` is extracted — including the test's `unique_id`, `execution_time`, and error `message`
-3. The alert lists up to **5 individual test failures** inline, showing the short test name, status (`FAIL` / `ERROR`), and the database message (e.g. "Got 10000 results, configured to fail if != 0")
-4. If more than 5 tests fail, a summary line shows the remainder count
-5. The payload also includes the total tests run, failed count, errored count, and the dbt process exit code
-
-**Alert title:** `🚨 DATA QUALITY SLA BREACH: dbt Test Failed!`  
-**Colour:** Red (`0xFF0000`)
+1. Calls `parse_dbt_test_results()` which reads `dbt/target/run_results.json`
+2. Extracts every result with `status == "fail"` or `status == "error"`
+3. Lists up to 5 individual failures inline with short test name, status, and database message
+4. Shows remainder count if more than 5 tests fail
+5. Dispatches with title: `�� DATA QUALITY SLA BREACH: dbt Test Failed!`
 
 ### Key Design Decisions
 
 | Concern | Implementation |
 |---------|---------------|
-| **Transport** | `requests.post()` with 15-second timeout — more robust than `urllib.request` against intermittent network issues |
-| **Auto-detection** | URL pattern determines Discord vs Slack payload format |
-| **No dependency** | Graceful skip if `PIPELINE_WEBHOOK_URL` is unset (logs "Webhook not configured, skipping live alert.") |
-| **Colour coding** | Discord embeds use `color` field: `0x57F287` (green), `0xFEE75C` (amber), `0xED4245` (red) |
-| **Slack format** | Modern **Block Kit** payload (header, context, divider, section fields, footer) instead of the legacy `attachments` format |
-| **Discord format** | Standard embed with title, colour bar, fields, footer, and ISO-8601 timestamp |
-| **Cloudflare bypass** | Custom `User-Agent` header mimics a real browser to avoid 403 blocks from containerised requests |
-| **Error resilience** | All HTTP exceptions are caught (ConnectionError, Timeout, RequestException) — a webhook failure **never** crashes the pipeline |
-| **Response logging** | On HTTP 4xx/5xx, the first 500 chars of the response body are logged for debugging malformed payloads |
-| **Structured fields** | DLQ warning includes Loaded / Rejected / Rejection Rate %; failure alert includes exit code |
-| **Rich dbt failure payload** | `parse_dbt_test_results()` extracts per-test metadata from `run_results.json` — up to 5 individual failures are listed inline with their unique ID, status, and database message |
-
-### Usage
-
-```bash
-# Set the webhook URL in .env (auto-loaded by alerts.py)
-PIPELINE_WEBHOOK_URL=https://discord.com/api/webhooks/...
-
-# Alerts fire automatically during pipeline execution
-python scripts/orchestrate.py --profile small
-
-# Diagnostic: send a test message to verify your webhook config
-python scripts/alerts.py --test-webhook
-```
+| **Transport** | `requests.post()` with 15-second timeout |
+| **Auto-detection** | URL domain pattern determines Discord vs Slack format |
+| **Graceful skip** | Logs "Webhook not configured" if `PIPELINE_WEBHOOK_URL` unset |
+| **Error resilience** | All HTTP exceptions caught — webhook failure never crashes pipeline |
+| **Response logging** | First 500 chars of response body logged on 4xx/5xx |
+| **Proxy support** | `session.trust_env = True` for corporate proxy environments |
+| **Plain-text fallback** | If Discord embed is rejected (4xx), retries with plain `content` message |
 
 ---
 
-## 12. Layer 7 — Data Governance & Lineage
-
-**Mechanism:**
-- `dbt docs generate` (step 6 in the orchestrator) + `make docs` (local dev)
-- **`scripts/generate_lineage.py`** — a dynamic, programmatic lineage graph exporter (step 7 in the orchestrator)
+## 13. Layer 7 — Data Governance & Lineage
 
 The pipeline produces two complementary artifacts:
-1. An **interactive data catalog** (dbt docs) — browsable model catalogue, column-level metadata, interactive DAG, test dashboard
-2. A **static lineage blueprint** — a high-resolution PNG visualisation of the model dependency graph, colour-coded by architectural layer
 
-### dbt Documentation Catalog
-
-1. **Orchestrator Step 6** — after all pipeline steps succeed, the orchestrator runs `dbt docs generate` inside the isolated `.venv-dbt` environment
-2. **`make docs`** — a Makefile shortcut that launches the local web server for any contributor to inspect the catalog
-
-```bash
-# Generate docs (automatic at end of pipeline)
-python scripts/orchestrate.py
-
-# View the metadata portal in a browser
-make docs
-# Opens at: http://localhost:8080
-```
-
-### What the Catalog Shows
-
-| Feature | Description |
-|---------|-------------|
-| **Model catalogue** | All 7 dbt models with column-level types, descriptions, and materialisation |
-| **Data lineage** | Interactive DAG showing `ref()` and `source()` dependencies across staging → intermediate → marts |
-| **Test results** | 48 data-quality tests with pass/fail status per model |
-| **Macro documentation** | Documented Jinja macros (`cents_to_dollars`, override schema) |
-| **Exposures** | Dashboard and Excel export registered as downstream consumers |
+| Artifact | Tool | Location | Purpose |
+|----------|------|----------|---------|
+| **Interactive catalog** | `dbt docs generate` | `dbt/target/` (via `make docs` at localhost:8080) | Browsable model catalogue, column metadata, interactive DAG, test dashboard |
+| **Static lineage blueprint** | `generate_lineage.py` | `docs/lineage/current_data_lineage.png` | Version-control-friendly, colour-coded PNG showing model dependency graph |
 
 ### Dynamic Lineage Blueprint (Step 7)
 
-**Script:** `scripts/generate_lineage.py` — runs automatically as **orchestrator Step 7** after `dbt docs generate`.
-
-This module produces a **static, high-resolution PNG lineage graph** that visually documents how data flows through the transformation layers.
+**Script:** `scripts/generate_lineage.py`
 
 #### How It Works
 
-1. **Parses** `dbt/target/manifest.json` — the JSON artifact produced by `dbt docs generate`
-2. **Filters** to `resource_type == "model"` nodes only (sources such as `raw.orders` are excluded, as they represent upstream raw data rather than transformations)
+1. **Parses** `dbt/target/manifest.json` — the JSON artifact from `dbt docs generate`
+2. **Filters** to `resource_type == "model"` nodes only
 3. **Detects layer** from model name prefix:
    - `stg_*` → **Staging** (green `#2E8B57`)
    - `int_*` → **Intermediate** (blue `#4169E1`)
    - `dim_*` / `fct_*` → **Marts** (gold `#DAA520`)
-4. **Builds a `networkx.DiGraph`** — edges are added for every `ref()` dependency between models (edges from `source.*` references are skipped)
-5. **Computes a layered layout** — staging models on the left, intermediate in the centre, marts on the right — mirroring the left-to-right data flow of the architecture diagram
-6. **Renders** the graph with `matplotlib` at 200 DPI with:
-   - Colour-coded circular nodes with dark borders
-   - White bold labels with a dark stroke for readability
-   - Directed arrows (`-|>` style) showing dependency direction
-   - Layer annotations above each column
-   - Light grey background (#FAFAFA)
-
-#### Output
-
-```
-docs/lineage/current_data_lineage.png
-```
-
-Saved as a static asset that can be:
-- Committed to the repository for PR reviews
-- Embedded in documentation or runbooks
-- Compared across pipeline runs to detect structural drift
+4. **Builds a `networkx.DiGraph`** — edges for every `ref()` dependency
+5. **Computes a layered layout** — staging left, intermediate centre, marts right
+6. **Renders** with `matplotlib` at 200 DPI
 
 #### Example Graph Structure
 
@@ -836,32 +803,38 @@ Saved as a static asset that can be:
                   └──> dim_products
 ```
 
-### Lifecycle
+#### Lifecycle
 
 ```
-                     ┌─────────────────────────────────────────────────┐
-                     │         Pipeline Orchestrator                   │
-                     │  Step 1-5 (data → load → dbt → test → export)  │
-                     └──────────────────────┬──────────────────────────┘
-                                            │
-                     ┌──────────────────────▼──────────────────────────┐
-                     │  Step 6: dbt docs generate  (.venv-dbt)         │
-                     │  → dbt/target/manifest.json                     │
-                     │  → dbt/target/catalog.json                      │
-                     └──────────────────────┬──────────────────────────┘
-                                            │
-                     ┌──────────────────────▼──────────────────────────┐
-                     │  Step 7: generate_lineage.py  (.venv)           │
-                     │  → parses manifest.json via networkx.DiGraph    │
-                     │  → renders docs/lineage/current_data_lineage.png│
-                     └─────────────────────────────────────────────────┘
+Pipeline ──> dbt docs generate ──> manifest.json ──> generate_lineage.py ──> current_data_lineage.png
+(steps 1-5)  (Step 6, .venv-dbt)                    (Step 7, .venv)          (docs/lineage/)
 ```
 
 ---
 
-## 13. Step-by-Step Execution Sequence
+## 14. Layer 8 — Data Profiling
 
-> Use this checklist when cloning the repo onto a **fresh machine**. Run commands in order.
+**Script:** `scripts/generate_profiling.py` (Step 8)
+
+Generates an interactive HTML data profile report for all three mart tables:
+
+| Table | Rows | Columns Profiled |
+|-------|------|------------------|
+| `marts.dim_customers` | 1,000 | 11 |
+| `marts.dim_products` | 100 | 9 |
+| `marts.fct_orders` | 10,000 | 10 |
+
+**Per-column statistics:**
+- Missing count and percentage (with progress bar)
+- Cardinality flags (high/medium/low)
+- Numeric columns: min, max, mean, median, std, skew, P25, P75
+- Categorical columns: top value, top frequency
+
+**Output:** `docs/profiling/retailflow_data_profile.html` — self-contained, interactive HTML with CSS tab navigation, summary cards, and expandable stats sections.
+
+---
+
+## 15. Step-by-Step Execution Sequence
 
 ### Prerequisites
 
@@ -872,101 +845,57 @@ Saved as a static asset that can be:
 ### Setup
 
 ```bash
-# 1. Clone
 git clone https://github.com/elhussienysabry/retailflow-pipeline.git
 cd retailflow-pipeline
-
-# 2. Environment file
 cp .env.example .env
-# (edit .env if needed — defaults work for local dev)
 
-# 3. Main virtual environment + deps
-make setup
-
-# 4. Isolated dbt environment
-make setup-dbt
-
-# 5. Start PostgreSQL
-make run
+make setup            # .venv + pip install
+make setup-dbt        # .venv-dbt + dbt-core install
+make run              # docker compose up -d
 ```
 
-### Full Pipeline (Single Unified Command)
+### Full Pipeline (Single Command)
 
 ```bash
-# 6. Run everything — generate, load, transform, test, export, docs
 make pipeline
-# OR directly:
-.venv\Scripts\python scripts\orchestrate.py
-
-# With a specific scale profile:
-.venv\Scripts\python scripts\orchestrate.py --profile small
-
-# The orchestrator runs all 7 steps automatically:
-#   [1] Generate Data        (.venv)
-#   [2] Load PostgreSQL      (.venv)
-#   [3] dbt Run              (.venv-dbt)
-#   [4] dbt Test             (.venv-dbt)
-#   [5] Excel Export         (.venv)
-#   [6] dbt Docs Generate    (.venv-dbt)
-#   [7] Lineage Graph Export (.venv)
+# OR
+.venv\Scripts\python scripts/orchestrate.py --profile small
 ```
 
-### View the Metadata Catalog
+The orchestrator runs all 8 steps:
 
-```bash
-# 7. Launch the interactive dbt docs portal in your browser
-make docs
-# Opens at: http://localhost:8080
-# Shows model catalogue, lineage graph, test results, and macros
-```
-
-### Step-by-Step (Manual — for Debugging)
-
-```bash
-# 6a. Generate synthetic data
-make generate-data
-# Options: --profile small | medium | large
-
-# 6b. Load CSVs into PostgreSQL raw schema
-make load-data
-
-# 6c. Run dbt transformations (staging → intermediate → marts)
-make dbt-run
-
-# 6d. Run dbt data quality tests
-make dbt-test
-
-# 6e. Export styled Excel workbook
-make export
-# Saves to: outputs/retail_analytics_*.xlsx
-
-# 6f. Generate dbt docs
-cd dbt && ..\.venv-dbt\Scripts\dbt docs generate
-
-# 7. Launch interactive dashboard
-make dashboard
-# Opens at: http://localhost:8501
-
-# 8. Launch dbt metadata portal
-make docs
-# Opens at: http://localhost:8080
-```
+| Step | Component | Environment | What Happens |
+|------|-----------|-------------|-------------|
+| 1 | Generate Data | `.venv` | Faker creates CSVs + JSON in `data/raw/` |
+| 2 | Load to PostgreSQL | `.venv` | Schema drift check → validation → PII hash → load → unified upsert |
+| 3 | dbt Run | `.venv-dbt` | staging (views) → intermediate (view) → marts (tables, full-refresh) |
+| 4 | dbt Test | `.venv-dbt` | 48 data quality tests executed |
+| 5 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` |
+| 6 | dbt Docs Generate | `.venv-dbt` | `dbt compile` + `dbt docs generate` → `manifest.json` |
+| 7 | Lineage Graph Export | `.venv` | NetworkX parses manifest → PNG at `docs/lineage/` |
+| 8 | Data Profile Report | `.venv` | Pandas profiles mart tables → HTML at `docs/profiling/` |
 
 ### Validation
 
 ```bash
-# 12. Run project health check
+# Health check
 make status
 
-# 13. Run full Python test suite
+# Python tests
 make test
-# Or: .venv\Scripts\python -m pytest tests/ -v --tb=short
+
+# dbt tests (separate)
+cd dbt && ..\.venv-dbt\Scripts\dbt test
+
+# View artifacts
+make docs             # dbt docs portal at localhost:8080
+make dashboard        # Streamlit at localhost:8501
 ```
 
 ### CI/CD (GitHub)
 
-Once pushed to `main` / `master`, the workflow at `.github/workflows/ci_cd.yml` automatically:
-1. Spins up PostgreSQL
+Once pushed to `main`/`master`, the workflow at `.github/workflows/ci_cd.yml` automatically:
+1. Spins up PostgreSQL service container
 2. Installs all Python deps
 3. Runs `flake8` + `black --check`
 4. Executes 77+ pytest tests
@@ -975,4 +904,4 @@ Once pushed to `main` / `master`, the workflow at `.github/workflows/ci_cd.yml` 
 
 ---
 
-*Architecture document v1.1 — Generated for the RetailFlow Pipeline project.*
+*Architecture document v1.1.0 — Generated for the RetailFlow Pipeline project.*

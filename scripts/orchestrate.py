@@ -125,6 +125,9 @@ if not _ALERTS_AVAILABLE:
 
 # Store the last parsed DLQ data so alert functions can reference it.
 _last_dlq_data: Dict[str, Any] = {}
+# Store schema drift data captured during Step 2.
+_last_schema_drift_critical: List[Dict[str, Any]] = []
+_last_schema_drift_warning: List[Dict[str, Any]] = []
 
 
 class CommandResult(NamedTuple):
@@ -256,6 +259,117 @@ def _log_dlq_summary(output_lines: List[str]) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Schema Drift marker parsing & alerting
+# ---------------------------------------------------------------------------
+
+
+def _parse_schema_drift_data(
+    output_lines: List[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Extract schema drift markers from captured subprocess output.
+
+    Returns:
+        (critical_list, warning_list) — each list contains the parsed
+        JSON details dicts from any SCHEMA_DRIFT_CRITICAL: and
+        SCHEMA_DRIFT_WARNING: lines found in the output.
+    """
+    critical: List[Dict[str, Any]] = []
+    warning: List[Dict[str, Any]] = []
+
+    for line in output_lines:
+        if line.startswith("SCHEMA_DRIFT_CRITICAL:"):
+            try:
+                critical.append(
+                    json.loads(line[len("SCHEMA_DRIFT_CRITICAL:"):])
+                )
+            except (json.JSONDecodeError, KeyError):
+                logger.warning(
+                    "Could not parse SCHEMA_DRIFT_CRITICAL: %s", line
+                )
+        elif line.startswith("SCHEMA_DRIFT_WARNING:"):
+            try:
+                warning.append(
+                    json.loads(line[len("SCHEMA_DRIFT_WARNING:"):])
+                )
+            except (json.JSONDecodeError, KeyError):
+                logger.warning(
+                    "Could not parse SCHEMA_DRIFT_WARNING: %s", line
+                )
+
+    return critical, warning
+
+
+def _log_schema_drift(
+    critical_list: List[Dict[str, Any]],
+    warning_list: List[Dict[str, Any]],
+) -> None:
+    """Log parsed schema drift events."""
+    for item in critical_list:
+        entity = item.get("entity", "unknown")
+        missing = item.get("missing_columns", [])
+        mismatches = item.get("type_mismatches", {})
+        logger.critical(
+            "Schema Drift [CRITICAL] — %s quarantined. "
+            "Missing: %s  Type mismatches: %s",
+            entity,
+            ", ".join(missing) if missing else "none",
+            mismatches,
+        )
+    for item in warning_list:
+        entity = item.get("entity", "unknown")
+        extra = item.get("extra_columns", [])
+        logger.warning(
+            "Schema Drift [WARNING] — %s has extra columns: %s",
+            entity,
+            ", ".join(extra),
+        )
+
+
+def _send_schema_drift_alerts(
+    critical_list: List[Dict[str, Any]],
+    warning_list: List[Dict[str, Any]],
+) -> None:
+    """Dispatch alerts for schema drift events.
+
+    Critical drift → red alert with missing/type details.
+    Warning drift  → amber alert with extra column details.
+    """
+    if not _ALERTS_AVAILABLE:
+        return
+
+    for item in critical_list:
+        entity = item.get("entity", "unknown")
+        missing = item.get("missing_columns", [])
+        mismatches = item.get("type_mismatches", {})
+        details: Dict[str, Any] = {
+            "Entity": entity,
+            "Severity": "CRITICAL — Pipeline Halted",
+        }
+        if missing:
+            details["Missing Columns"] = ", ".join(missing)
+        if mismatches:
+            details["Type Mismatches"] = str(mismatches)
+        send_pipeline_alert(
+            status="critical",
+            stage="schema-drift",
+            details=details,
+        )
+
+    for item in warning_list:
+        entity = item.get("entity", "unknown")
+        extra = item.get("extra_columns", [])
+        send_pipeline_alert(
+            status="warning",
+            stage="schema-drift",
+            details={
+                "Entity": entity,
+                "Severity": "WARNING — Pipeline Continuing",
+                "Extra Columns": ", ".join(extra),
+            },
+        )
+
+
 def _send_ingestion_alert() -> None:
     """Dispatch a warning-level alert if any rows were sent to the DLQ
     during the ingestion phase."""
@@ -355,12 +469,21 @@ def step_generate_data(profile: str = "medium") -> int:
 
 
 def step_load_to_postgres() -> int:
-    """Step 2: Load CSV files into PostgreSQL raw schema with DLQ guardrail."""
+    """Step 2: Load CSV files into PostgreSQL raw schema with DLQ guardrail.
+
+    Stores parsed schema drift data in module globals for alert
+    dispatch after the step completes.
+    """
+    global _last_schema_drift_critical, _last_schema_drift_warning
     result = _run_command(
         [_py_exe(), str(PROJECT_ROOT / "scripts" / "load_to_postgres.py")],
         label="load-to-postgres",
     )
     _log_dlq_summary(result.output)
+    drift_critical, drift_warning = _parse_schema_drift_data(result.output)
+    _log_schema_drift(drift_critical, drift_warning)
+    _last_schema_drift_critical = drift_critical
+    _last_schema_drift_warning = drift_warning
     return result.returncode
 
 
@@ -522,16 +645,26 @@ def main() -> None:
 
         if rc == 0:
             logger.info(STEP_OK.format(name=step_name, elapsed=elapsed))
-            # Send ingestion-phase warning alert if rows were rejected.
+            # Ingestion-phase alerts: DLQ, schema drift.
             if step_name == "Load to PostgreSQL":
                 _send_ingestion_alert()
+                _send_schema_drift_alerts(
+                    _last_schema_drift_critical,
+                    _last_schema_drift_warning,
+                )
         else:
             logger.critical(STEP_FAIL.format(name=step_name, code=rc))
             # Circuit breaker: dispatch critical alert before exiting.
             _send_step_failure_alert(step_name, rc)
             print()
             print("+" + "=" * 70 + "+")
-            print("|  FAIL  PIPELINE HALTED")
+            halt_reason = (
+                "SCHEMA DRIFT — Critical schema change detected. "
+                "Source file quarantined."
+                if rc == 2
+                else "Pipeline halted by circuit breaker."
+            )
+            print("|  FAIL  %s" % halt_reason)
             print("|  Step '%s' failed with exit code %d." % (step_name, rc))
             print("|  Subsequent steps were skipped.")
             print("+" + "=" * 70 + "+")

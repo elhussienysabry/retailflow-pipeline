@@ -30,9 +30,10 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import sys
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -64,6 +65,219 @@ DTYPE_MAP: Dict[str, object] = {
     "supplier_country": "string",
     "status": "string",
 }
+
+
+# ---------------------------------------------------------------------------
+# Schema Blueprint — Drift Detector
+# ---------------------------------------------------------------------------
+# Defines the expected schema for every source file. The drift detector
+# compares actual file columns (and their pandas dtypes) against this
+# blueprint before any data is loaded.
+#
+# Severity levels:
+#   CRITICAL — Missing required column or type mismatch → file moved to
+#              data/rejected_schemas/, pipeline halts, red alert fired.
+#   WARNING  — Extra unknown column present → pipeline continues, amber
+#              alert fired.
+# ---------------------------------------------------------------------------
+
+SCHEMA_BLUEPRINT: Dict[str, Dict[str, Any]] = {
+    "customers": {
+        "required_columns": {
+            "customer_id": "string",
+            "first_name": "string",
+            "last_name": "string",
+            "email": "string",
+            "country": "string",
+            "city": "string",
+            "signup_date": "string",
+            "age": "int64",
+            "gender": "string",
+        },
+    },
+    "products": {
+        "required_columns": {
+            "product_id": "string",
+            "name": "string",
+            "category": "string",
+            "price_cents": "int64",
+            "stock_quantity": "int64",
+            "supplier_country": "string",
+        },
+    },
+    "orders": {
+        "required_columns": {
+            "order_id": "string",
+            "customer_id": "string",
+            "product_id": "string",
+            "quantity": "int64",
+            "order_date": "string",
+            "status": "string",
+            "discount_pct": "int64",
+            "shipping_days": "int64",
+        },
+    },
+    "pos_store_sales": {
+        "required_columns": {
+            "sale_id": "string",
+            "store_id": "string",
+            "product_id": "string",
+            "quantity": "int64",
+            "unit_price_cents": "int64",
+            "total_amount": "int64",
+            "transaction_timestamp": "string",
+            "payment_method": "string",
+        },
+    },
+}
+
+_REJECTED_SCHEMAS_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "data", "rejected_schemas"
+)
+
+
+def _normalize_dtype(dtype_str: str) -> str:
+    """Normalise pandas dtype strings for cross-version comparison.
+
+    - ``"string"``, ``"str"``, ``"object"`` → ``"string"``
+    - ``"int64"``, ``"Int64"``, ``"int32"`` → ``"int64"``
+    - ``"float64"``, ``"Float64"``, ``"float32"`` → ``"float64"``
+    - ``"bool"``, ``"boolean"`` → ``"bool"``
+    """
+    base = dtype_str.lower().strip()
+    if base in ("string", "str", "object"):
+        return "string"
+    if base.startswith("int"):
+        return "int64"
+    if base.startswith("float"):
+        return "float64"
+    if base in ("bool", "boolean"):
+        return "bool"
+    return base
+
+
+def _detect_schema_drift(
+    filepath: str, entity_name: str, file_type: str
+) -> Tuple[str, Dict[str, Any]]:
+    """Compare actual file columns against the schema blueprint.
+
+    Args:
+        filepath: Absolute path to the source file.
+        entity_name: Blueprint key (e.g. ``"customers"``).
+        file_type: ``"csv"`` or ``"json"``.
+
+    Returns:
+        ``("none", {})`` if the schema matches the blueprint.
+        ``("warning", details)`` if extra unknown columns are found
+        (pipeline continues, non-blocking).
+        ``("critical", details)`` if required columns are missing or
+        types mismatch (caller must halt the pipeline).
+
+    The caller is responsible for moving the file to
+    ``data/rejected_schemas/`` on critical drift.
+    """
+    blueprint = SCHEMA_BLUEPRINT.get(entity_name)
+    if blueprint is None:
+        return "none", {}
+
+    required = set(blueprint["required_columns"].keys())
+
+    # ── Read one row to inspect column names & types ────────────
+    try:
+        if file_type == "csv":
+            sample = pd.read_csv(filepath, nrows=1)
+        elif file_type == "json":
+            with open(filepath, encoding="utf-8") as f:
+                records = json.load(f)
+            sample = pd.DataFrame(records[:1]) if records else pd.DataFrame()
+        else:
+            return "none", {}
+    except Exception:
+        logger.warning("Could not read %s for schema drift check.", filepath)
+        return "none", {}
+
+    actual_cols = set(sample.columns)
+    actual_dtypes: Dict[str, str] = {
+        col: str(dtype) for col, dtype in sample.dtypes.items()
+    }
+
+    # ── Critical: missing required columns ──────────────────────
+    missing = required - actual_cols
+    if missing:
+        details: Dict[str, Any] = {
+            "entity": entity_name,
+            "severity": "critical",
+            "filepath": filepath,
+            "missing_columns": sorted(missing),
+        }
+        logger.critical(
+            "SCHEMA DRIFT [CRITICAL] — %s missing required column(s): %s",
+            entity_name,
+            ", ".join(sorted(missing)),
+        )
+        return "critical", details
+
+    # ── Critical: column type mismatches ────────────────────────
+    type_mismatches: Dict[str, Dict[str, str]] = {}
+    for col, expected_type in blueprint["required_columns"].items():
+        if col in actual_dtypes:
+            actual_norm = _normalize_dtype(actual_dtypes[col])
+            expected_norm = _normalize_dtype(expected_type)
+            if actual_norm != expected_norm:
+                type_mismatches[col] = {
+                    "expected": expected_type,
+                    "actual": actual_dtypes[col],
+                }
+    if type_mismatches:
+        details = {
+            "entity": entity_name,
+            "severity": "critical",
+            "filepath": filepath,
+            "type_mismatches": type_mismatches,
+        }
+        logger.critical(
+            "SCHEMA DRIFT [CRITICAL] — %s has type mismatch(es): %s",
+            entity_name,
+            type_mismatches,
+        )
+        return "critical", details
+
+    # ── Warning: extra columns beyond the blueprint ─────────────
+    extra = actual_cols - required
+    if extra:
+        details = {
+            "entity": entity_name,
+            "severity": "warning",
+            "filepath": filepath,
+            "extra_columns": sorted(extra),
+        }
+        logger.warning(
+            "SCHEMA DRIFT [WARNING] — %s has extra unknown column(s): %s",
+            entity_name,
+            ", ".join(sorted(extra)),
+        )
+        return "warning", details
+
+    return "none", {}
+
+
+def _move_to_rejected_schemas(filename: str) -> str:
+    """Move a source file to the ``data/rejected_schemas/`` quarantine.
+
+    Args:
+        filename: Base name of the file (e.g. ``"orders.csv"``).
+
+    Returns:
+        Destination path of the moved file.
+    """
+    src = os.path.join(
+        os.path.dirname(__file__), "..", "data", "raw", filename
+    )
+    os.makedirs(_REJECTED_SCHEMAS_DIR, exist_ok=True)
+    dest = os.path.join(_REJECTED_SCHEMAS_DIR, filename)
+    shutil.move(src, dest)
+    logger.warning("File moved to schema quarantine: %s → %s", src, dest)
+    return dest
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +751,30 @@ def main() -> None:
         per_table: Dict[str, Dict[str, int]] = {}
 
         for filename, table_name, file_type in SOURCE_MAP:
+            # ── Schema Drift Detection ──────────────────────────
+            entity_name = (
+                filename.replace(".csv", "").replace(".json", "")
+            )
+            filepath = os.path.join(
+                os.path.dirname(__file__), "..", "data", "raw", filename
+            )
+            drift_type, drift_details = _detect_schema_drift(
+                filepath, entity_name, file_type
+            )
+
+            if drift_type == "critical":
+                _move_to_rejected_schemas(filename)
+                print(f"SCHEMA_DRIFT_CRITICAL:{json.dumps(drift_details)}")
+                logger.critical(
+                    "Schema drift — critical. Pipeline halted "
+                    "for %s.", filename
+                )
+                sys.exit(2)
+
+            if drift_type == "warning":
+                print(f"SCHEMA_DRIFT_WARNING:{json.dumps(drift_details)}")
+
+            # ── Continue with normal load ───────────────────────
             # JSON tables are created/replaced by _load_json_to_table,
             # so skip the truncate step for them.
             if file_type != "json":

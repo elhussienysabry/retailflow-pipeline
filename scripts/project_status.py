@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
+DATA_REJECTED_SCHEMAS = PROJECT_ROOT / "data" / "rejected_schemas"
 ENV_FILE = PROJECT_ROOT / ".env"
 
 REQUIRED_CSVS: List[str] = ["customers.csv", "products.csv", "orders.csv"]
@@ -156,6 +157,28 @@ def check_raw_csvs() -> Tuple[str, str]:
     )
 
 
+def check_schema_drift() -> Tuple[str, str]:
+    """Check whether any source files have been quarantined by the
+    Schema Drift Detector.
+
+    Returns:
+        (status, message).
+    """
+    if not DATA_REJECTED_SCHEMAS.exists():
+        return "OK", "No schema drift quarantined files"
+
+    quarantined = list(DATA_REJECTED_SCHEMAS.iterdir())
+    if not quarantined:
+        return "OK", "No schema drift quarantined files"
+
+    names = ", ".join(f.name for f in quarantined)
+    return (
+        "FAIL",
+        f"Schema drift quarantined file(s): {names}. "
+        f"Review data/rejected_schemas/ and reconcile the schema blueprint.",
+    )
+
+
 def check_database_rows() -> Tuple[str, str]:
     """Check whether each raw PostgreSQL table contains rows.
 
@@ -267,6 +290,12 @@ def _print_fix_hints(failed: List[Tuple[str, str]]) -> None:
         "Raw CSV Files": (
             "Run: .venv\\Scripts\\python scripts\\generate_fake_data.py"
         ),
+        "Schema Drift": (
+            "Review files in data/rejected_schemas/. A source file has a "
+            "different schema than expected by the blueprint in "
+            "scripts/load_to_postgres.py. Update SCHEMA_BLUEPRINT or "
+            "fix the source file, then move it back to data/raw/."
+        ),
         "Database Row Counts": (
             "Run: .venv\\Scripts\\python scripts\\load_to_postgres.py"
         ),
@@ -303,12 +332,15 @@ def main() -> None:
             else check_database_rows()
         )
 
+    schema_status = check_schema_drift()
+
     checks: List[Tuple[str, Tuple[str, str]]] = [
         ("Docker", docker_status),
         ("PostgreSQL", pg_status),
         (".env File", env_status),
         ("Raw CSV Files", csv_status),
         ("Database Row Counts", row_status),
+        ("Schema Drift", schema_status),
     ]
 
     overall = _determine_overall([s for _, (s, _) in checks])
