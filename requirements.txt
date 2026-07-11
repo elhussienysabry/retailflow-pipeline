@@ -18,10 +18,6 @@ Faker==22.6.0
 # Orchestration
 apache-airflow>=2.7.0
 
-# Data transformation
-dbt-core>=1.7.0
-dbt-postgres>=1.7.0
-
 # Data quality
 great_expectations==0.18.19
 

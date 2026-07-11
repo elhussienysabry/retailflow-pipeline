@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Tuple
 
+from dotenv import load_dotenv
+
 logger = logging.getLogger("orchestrate")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -609,6 +611,11 @@ def main() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    # Load .env so subprocesses inherit POSTGRES_* and PIPELINE_WEBHOOK_URL
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=True)
 
     _run_preflight_checks()
 

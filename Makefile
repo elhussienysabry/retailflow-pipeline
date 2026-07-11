@@ -138,12 +138,13 @@ format:  # Auto-format all Python code with black
 	@.venv\Scripts\black scripts\ airflow\ tests\
 	@echo ">> Formatting complete."
 
-clean:  # Remove generated data, Python cache, and Docker volumes
+clean:  # Remove generated data, Python cache, Docker volumes, and both virtual environments
 	@echo ">> Cleaning generated data..."
 	@if exist "data\raw\*.csv" del /q data\raw\*.csv 2>nul
 	@if exist "data\processed\*.csv" del /q data\processed\*.csv 2>nul
-	@echo ">> Removing Python cache..."
+	@echo ">> Removing Python virtual environments..."
 	@if exist ".venv" rmdir /s /q .venv 2>nul
+	@if exist ".venv-dbt" rmdir /s /q .venv-dbt 2>nul
 	@echo ">> Removing Docker volumes..."
 	@docker compose down -v 2>nul
 	@echo ">> Clean complete."

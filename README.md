@@ -1,49 +1,43 @@
-# RetailFlow Pipeline
-
-**A foundational data engineering project — simulating a production-grade ELT pipeline for a fictional e-commerce company.**
+# RetailFlow Pipeline — v1.2.0
 
 [![CI/CD Build Status](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml/badge.svg)](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
+[![PostgreSQL 15](https://img.shields.io/badge/postgres-15-316192.svg)](https://www.postgresql.org/)
+[![dbt 1.7](https://img.shields.io/badge/dbt-1.7-E34F26.svg)](https://github.com/dbt-labs/dbt-core)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
----
-
-## Why This Project Exists
-
-This repository is a **learning-first data engineering project**. It intentionally mirrors the tools, patterns, and operational concerns you encounter daily in a real data team — but keeps the scope small enough to build in a weekend and reason about end-to-end.
-
-The core narrative:
-
-> Your company sells products online and in physical stores. Thousands of orders arrive every day. The CEO wants dashboards, the data team wants quality guarantees, and the platform needs to survive schema changes without waking anyone at 3 AM.
-
-This project shows how those concerns translate into code.
+> **A learning-first, production-grade data engineering pipeline** — simulating a real-world ELT platform for a fictional e-commerce company. Built to demonstrate mastery of modern data stack engineering: schema governance, idempotent warehousing, CI/CD automation, data quality circuit breakers, and observability-driven alerting.
 
 ---
 
 ## Five Engineering Achievements
 
-| # | Capability | What It Does | Why It Matters |
-|---|-----------|-------------|----------------|
-| 1 | **Dual Virtual Environment Strategy** | `.venv` for core data processing (pandas, streamlit, airflow) and `.venv-dbt` for isolated dbt-core (avoids `mashumaro` dependency conflict) | Real-world dependency management — Airflow + dbt cannot coexist in the same `pip install`. This mirrors how teams isolate production runtimes. |
-| 2 | **CI/CD & DevOps Automation** | GitHub Actions workflow on every push: `flake8` linting, `black --check` formatting, 77+ `pytest` tests, and `dbt debug` + `dbt parse` against a live PostgreSQL service container | Ensures every commit is validated before merge. Catches SQL compilation errors, broken refs, and Python regressions automatically. |
-| 3 | **Schema Drift Detector** | Each source file is checked against a `SCHEMA_BLUEPRINT` before ingestion. Missing columns / type mismatches halt the pipeline (critical — file quarantined to `data/rejected_schemas/`, red alert fired). Extra unknown columns pass with an amber warning | Production pipelines break silently when source schemas evolve. This detector makes drift visible immediately, with graduated severity and automatic alerting. |
-| 4 | **Data Quality & Observability** | 48 automated dbt tests across all models. A circuit breaker reads `run_results.json` on failure and dispatches a metadata-rich alert listing every breached test (unique ID, status, database message) to Discord or Slack | Goes beyond pass/fail — the alert tells you *exactly* which data quality SLA was violated, with per-test execution details. |
-| 5 | **Automated Graph Lineage** | `generate_lineage.py` parses `dbt/target/manifest.json` via `networkx.DiGraph`, colour-codes nodes by layer (staging green / intermediate blue / marts gold), and renders a 200 DPI PNG at `docs/lineage/current_data_lineage.png` | Produces a version-control-friendly, commitable asset that documents how data flows through the transformation layers — no external tooling required. |
+| # | Achievement | Implementation | Production Relevance |
+|---|-------------|----------------|----------------------|
+| 1 | **Data Schema Evolution & Drift Detection** | `SCHEMA_BLUEPRINT` dictionary in `load_to_postgres.py` enforces per-entity column schemas. Missing columns / type mismatches → file quarantined to `data/rejected_schemas/`, pipeline halts with exit code 2, red alert dispatched. Extra unknown columns → amber warning, pipeline continues. | Prevents silent corruption when upstream source schemas evolve without notice. Graduated severity (Critical / Warning) mirrors real-world SLAs. |
+| 2 | **Warehouse Idempotency & Fault Tolerance** | TRUNCATE + INSERT for CSV sources; `INSERT ... ON CONFLICT (transaction_id, source_system) DO UPDATE` for the unified transactions upsert. Re-running the pipeline on the same data batch produces identical results with zero duplicates. | Guarantees deterministic re-runs — essential for backfills, retries, and incremental refresh cycles without data corruption. |
+| 3 | **Dual Virtual Environment Strategy** | `.venv/` (pandas, streamlit, airflow) and `.venv-dbt/` (dbt-core 1.7 + dbt-postgres) resolve the `mashumaro<4` vs `mashumaro>=4` dependency conflict between dbt-core and Airflow/Great Expectations. Orchestrator resolves the correct executable per step via `_py_exe()` / `_dbt_exe()`. | Mirrors production runtime isolation patterns — no single `pip install` can satisfy conflicting transitive dependencies. Common in teams running dbt alongside orchestration tools. |
+| 4 | **CI/CD & DevOps Automation** | GitHub Actions workflow (`.github/workflows/ci_cd.yml`) runs `flake8` linting, `black --check` formatting, full 77+ test `pytest` suite, and `dbt debug` + `dbt parse` SQL compilation against a live PostgreSQL 15 service container on every push/PR. | Catches Python regressions, SQL compilation errors, and broken `ref()` chains before merge. Service container pattern eliminates the need for external test databases. |
+| 5 | **Data Quality Circuit Breaker & Graph Lineage** | 48 automated dbt tests across all models. On failure, orchestrator reads `run_results.json`, dispatches per-test metadata (unique ID, status, execution time, database message) to Discord/Slack. After successful run, `generate_lineage.py` builds a `networkx.DiGraph` from `manifest.json` and renders a colour-coded 200 DPI PNG lineage map. | Goes beyond pass/fail — the alert tells the team *exactly* which SLA was breached. The commitable lineage artifact documents data flow without external tooling. |
 
 ---
 
-## Tech Stack
+## Technology Stack
 
-| Layer | Tools |
-|-------|-------|
-| **Language** | Python 3.12 |
-| **Warehouse** | PostgreSQL 15 (Docker) |
-| **Transformation** | dbt-core 1.7, dbt-postgres |
-| **Orchestration** | Python CLI orchestrator + Airflow DAG |
-| **Ingestion** | pandas, SQLAlchemy, Faker |
-| **Dashboard** | Streamlit, Plotly |
-| **CI/CD** | GitHub Actions (flake8, black, pytest, dbt parse) |
-| **Container** | Docker Compose (3 services) |
-| **Testing** | pytest 7, pytest-cov |
-| **Alerting** | Discord / Slack webhooks (requests) |
+| Layer | Tools | Purpose |
+|-------|-------|---------|
+| **Language** | Python 3.12 | Core pipeline, ingestion, automation |
+| **Warehouse** | PostgreSQL 15 (Docker) | Relational data warehouse |
+| **Transformation** | dbt-core 1.7, dbt-postgres 1.7 | SQL model compilation, incremental materialisation, data quality tests |
+| **Orchestration** | Python CLI orchestrator, Airflow DAG alternative | Sequential DAG execution, circuit breaker, environment switching |
+| **Ingestion** | pandas, SQLAlchemy, Faker | CSV + JSON hybrid ingestion, PII anonymisation, schema drift detection |
+| **Dashboard** | Streamlit, Plotly | Live KPI monitoring with 5-min cached refresh |
+| **CI/CD** | GitHub Actions (flake8, black, pytest, dbt parse) | Automated quality gates on every commit |
+| **Containerisation** | Docker Compose (PostgreSQL + app + pgAdmin) | Reproducible local development and deployment |
+| **Testing** | pytest 7, pytest-cov | 77+ unit and integration tests |
+| **Observability** | Discord / Slack webhooks, colour-coded embeds | Real-time pipeline alerting with rich failure metadata |
+| **Data Profiling** | pandas, self-contained HTML report | Per-column statistical analysis with interactive visualisation |
+| **Lineage** | networkx, matplotlib | Automated DAG rendering at 200 DPI |
 
 ---
 
@@ -54,216 +48,251 @@ git clone https://github.com/elhussienysabry/retailflow-pipeline.git
 cd retailflow-pipeline
 cp .env.example .env
 
-# Set up both virtual environments
-make setup            # .venv — pandas, streamlit, airflow, etc.
-make setup-dbt        # .venv-dbt — dbt-core + dbt-postgres only
+# Set up both isolated environments
+make setup            # .venv (core dependencies)
+make setup-dbt        # .venv-dbt (dbt-core + dbt-postgres only)
 
 # Start PostgreSQL
 make run
 
-# Run the full pipeline (8 steps, ~45 seconds on small profile)
+# Execute the full 8-step pipeline
 make pipeline
-# OR:
+# OR
 .venv\Scripts\python scripts\orchestrate.py --profile small
 ```
 
-That single command executes:
+### Pipeline Execution Map
 
-| Step | Component | Environment | Duration (small) |
-|------|-----------|-------------|-------------------|
-| 1 | Generate synthetic data (CSV + JSON) | `.venv` | ~1.5s |
-| 2 | Load + schema drift check + PII hash + upsert unified | `.venv` | ~4s |
-| 3 | dbt run (staging → intermediate → marts) | `.venv-dbt` | ~20s |
-| 4 | dbt test (48 quality checks) | `.venv-dbt` | ~6s |
-| 5 | Excel analytics export | `.venv` | ~1.5s |
-| 6 | dbt docs generate (catalog + lineage JSON) | `.venv-dbt` | ~12s |
-| 7 | NetworkX lineage graph render | `.venv` | ~2.5s |
-| 8 | HTML data profile report | `.venv` | ~1.5s |
+| Step | Component | Environment | What Happens | Duration (small) |
+|------|-----------|-------------|-------------|-------------------|
+| 1 | Generate Data | `.venv` | Faker creates 4 source files (CSV + JSON) in `data/raw/` | ~1.5s |
+| 2 | Load to PostgreSQL | `.venv` | Schema drift check → per-entity validation → PII SHA-256 hash → DLQ isolation → TRUNCATE + INSERT → unified upsert | ~4s |
+| 3 | dbt Run | `.venv-dbt` | Staging (views) → Intermediate (view) → Marts (tables, full-refresh) | ~20s |
+| 4 | dbt Test | `.venv-dbt` | 48 data quality tests executed; circuit breaker on failure | ~6s |
+| 5 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | ~1.5s |
+| 6 | dbt Docs Generate | `.venv-dbt` | `dbt compile` + `dbt docs generate` → `manifest.json` + `catalog.json` | ~12s |
+| 7 | Lineage Graph Export | `.venv` | NetworkX parses manifest → colour-coded PNG at `docs/lineage/` | ~2.5s |
+| 8 | Data Profile Report | `.venv` | Pandas profiles mart tables → interactive HTML at `docs/profiling/` | ~1.5s |
 
 ---
 
 ## Architecture Overview
 
 ```
-                    ┌──────────────────────────────────────────────┐
-                    │              DATA SOURCES                   │
-                    │  (Python Faker → CSVs + JSON in data/raw/)  │
-                    └──────────┬───────────────────┬──────────────┘
-                               │                   │
-                     ┌─────────▼─────────┐  ┌──────▼──────┐
-                     │  Schema Drift      │  │  Schema     │
-                     │  Detector          │  │  Harmoniser │
-                     │  (blueprint check) │  │  (unified   │
-                     │  ↳ rejected_schemas│  │   upsert)   │
-                     └─────────┬─────────┘  └──────┬──────┘
-                               │                   │
-                     ┌─────────▼───────────────────▼──────────┐
-                     │         PostgreSQL 15 (Docker)          │
-                     │  raw.customers  raw.orders              │
-                     │  raw.products   raw.pos_store_sales     │
-                     │  raw.unified_transactions               │
-                     └───────────────────┬─────────────────────┘
+                    ┌─────────────────────────────────────────────────────┐
+                    │                  DATA SOURCES                       │
+                    │  Python Faker → customers.csv  products.csv         │
+                    │                  orders.csv    pos_store_sales.json  │
+                    └──────────────────────┬──────────────────────────┬───┘
+                                           │                          │
+                                  ┌────────▼────────┐         ┌──────▼──────┐
+                                  │  SCHEMA DRIFT   │         │  JSON       │
+                                  │  DETECTOR       │         │  INGESTION  │
+                                  │  (Layer 0)      │         │             │
+                                  │                 │         │             │
+                                  │  ┌─ Blueprint   │         │             │
+                                  │  │  compare      │         │             │
+                                  │  │               │         │             │
+                                  │  │ Pass → load   │         │             │
+                                  │  │ WARN → alert  │         │             │
+                                  │  │ CRITICAL →    │         │             │
+                                  │  │  quarantine   │         │             │
+                                  │  │  + exit(2)    │         │             │
+                                  │  └───────────────┘         │             │
+                                  └──────┬─────────────────────┘─────────────┘
                                          │
-                    ┌────────────────────▼─────────────────────┐
-                    │         dbt Transformation Layer          │
-                    │                                           │
-                    │  staging ─► intermediate ─► marts         │
-                    │  (views)      (view)      (tables)       │
-                    │  stg_orders   int_orders_   dim_customers │
-                    │  stg_cust..   enriched      dim_products  │
-                    │  stg_prod..                 fct_orders    │
-                    │                                           │
-                    │  48 automated data quality tests          │
-                    └──────┬──────────────────┬────────────────┘
-                           │                  │
-              ┌────────────┼──────────────┐   │
-              ▼            ▼              ▼   ▼
-        ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐
-        │Streamlit │ │Excel     │ │dbt Docs  │ │Lineage Graph │
-        │Dashboard │ │Export    │ │Catalog   │ │(NetworkX PNG)│
-        │:8501     │ │outputs/  │ │make docs │ │docs/lineage/ │
-        └──────────┘ └──────────┘ └──────────┘ └──────────────┘
+                            ┌────────────┴────────────┐
+                            │                         │
+                     ┌──────▼──────┐          ┌───────▼──────────┐
+                     │  IDEMPOTENT  │          │  DEAD LETTER     │
+                     │  LOAD        │          │  QUEUE (DLQ)     │
+                     │  (TRUNCATE   │          │  data/rejected/  │
+                     │   + INSERT)  │          │                  │
+                     │  PII HASH    │          │  Bad rows with   │
+                     │  Validators  │          │  rejection_reason│
+                     └──────┬──────┘          └───────────────────┘
+                            │
+                     ┌──────▼───────────────────────────────────────┐
+                     │        PostgreSQL 15 WAREHOUSE                │
+                     │  raw.customers  raw.products  raw.orders      │
+                     │  raw.pos_store_sales  raw.unified_transactions│
+                     │  ┌─────────────────────────────────────────┐  │
+                     │  │ IDEMPOTENT: INSERT ... ON CONFLICT      │  │
+                     │  │ DO UPDATE (unified_transactions)        │  │
+                     │  └─────────────────────────────────────────┘  │
+                     └──────────────────────┬────────────────────────┘
+                                            │
+                     ┌──────────────────────▼────────────────────────┐
+                     │              dbt TRANSFORMATION                │
+                     │  staging ──► intermediate ──► marts           │
+                     │  (views)       (views)        (tables)        │
+                     │  stg_orders    int_orders_    dim_customers    │
+                     │  stg_cust..    enriched       dim_products     │
+                     │  stg_prod..                   fct_orders       │
+                     │                                               │
+                     │  ┌── 48 automated data quality tests ────┐    │
+                     │  │  not_null, unique, accepted_values,   │    │
+                     │  │  relationships, custom singular       │    │
+                     │  └───────────────────────────────────────┘    │
+                     └──────────────┬─────────────────────┬──────────┘
+                                    │                     │
+                    ┌───────────────┼─────────────────┐   │
+                    ▼               ▼                 ▼   ▼
+              ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐
+              │STREAMLIT │  │EXCEL     │  │dbt DOCS  │  │LINEAGE GRAPH │
+              │DASHBOARD │  │EXPORT    │  │CATALOG   │  │(NetworkX PNG)│
+              │:8501     │  │outputs/  │  │make docs │  │docs/lineage/ │
+              └──────────┘  └──────────┘  └──────────┘  └──────────────┘
+
+              ┌─────────────────────────────────────────────────────────┐
+              │              CI/CD (GitHub Actions)                     │
+              │  Push/PR ──► flake8 ──► black ──► pytest (77+) ──►     │
+              │               dbt debug ──► dbt parse (SQL compile)    │
+              │               PostgreSQL 15 service container (shared) │
+              └─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Project Structure
-
-```
-retailflow-pipeline/
-│
-├── .venv/                  # Main Python env — data gen, load, dashboard, tests
-├── .venv-dbt/              # Isolated dbt env — dbt-core, dbt-postgres only
-│
-├── scripts/
-│   ├── orchestrate.py       # 8-step pipeline orchestrator + circuit breaker
-│   ├── generate_fake_data.py# Faker-based synthetic data (CSV + JSON)
-│   ├── load_to_postgres.py # Hybrid ingestion, schema drift detector, PII hash, unified upsert
-│   ├── generate_lineage.py # NetworkX lineage graph renderer
-│   ├── generate_profiling.py# Pandas data profiling → HTML report
-│   ├── alerts.py            # Discord/Slack webhook dispatch
-│   └── project_status.py   # End-to-end health check
-│
-├── dbt/                     # dbt project (staging → intermediate → marts)
-│   ├── models/              # 7 SQL models with YAML test definitions
-│   ├── tests/               # 2 custom singular tests
-│   └── macros/              # Jinja SQL macros
-│
-├── src/
-│   ├── dashboard/app.py     # Streamlit KPI dashboard
-│   └── exports/excel_exporter.py # Styled Excel workbook export
-│
-├── airflow/dags/            # Airflow DAG definition (alternative orchestrator)
-├── sql/                     # Reference SQL (schema DDL + analytics queries)
-├── tests/                   # 77+ pytest tests
-├── docs/                    # Generated artifacts (lineage PNG, profiling HTML)
-│
-├── .github/workflows/       # CI/CD — lint, test, dbt-parse on every push
-├── docker-compose.yml       # PostgreSQL 15 + Streamlit app + pgAdmin
-├── Dockerfile               # Multi-stage, dual-venv image
-└── Makefile                 # Dev workflow commands
-```
-
----
-
-## Key Design Decisions
-
-### Dual Virtual Environments
-
-`dbt-core` 1.7 pins `mashumaro<4`. Airflow and Great Expectations require `mashumaro>=4`. These cannot coexist in one `pip install`. The project solves this with two independent venvs:
-
-| Environment | Location | Contents |
-|-------------|----------|----------|
-| **Main** | `.venv/` | pandas, SQLAlchemy, streamlit, airflow, GE, openpyxl, pytest, flake8, Faker |
-| **dbt** | `.venv-dbt/` | `dbt-core==1.7.14`, `dbt-postgres==1.7.14` |
-
-The orchestrator (`orchestrate.py`) resolves the correct executable per step using `_py_exe()` and `_dbt_exe()`, with `DBT_EXECUTABLE` env-var override for containerised runs.
+## Key Production Patterns
 
 ### Schema Drift Detection
 
-Every source file is checked against `SCHEMA_BLUEPRINT` before any data is loaded:
+Every source file is checked against `SCHEMA_BLUEPRINT` before any data touches PostgreSQL:
 
 ```
-                 ┌──────────────────────┐
-                 │   SCHEMA_BLUEPRINT   │
-                 │  customers: 9 cols   │
-                 │  products:  6 cols   │
-                 │  orders:    8 cols   │
-                 │  pos:       8 cols   │
-                 └───────┬──────────────┘
-                         │
-             ┌───────────┴───────────┐
-             ▼                       ▼
-    ┌──────────────────┐   ┌──────────────────────┐
-    │  Missing column  │   │  Extra column        │
-    │  Type mismatch   │   │  (not in blueprint)  │
-    │                  │   │                      │
-    │  CRITICAL        │   │  WARNING             │
-    │  → file moved to │   │  → pipeline continues│
-    │    rejected_schemas│  │  → amber alert fired │
-    │  → red alert     │   │                      │
-    │  → pipeline halts│   │                      │
-    └──────────────────┘   └──────────────────────┘
+                    ┌──────────────────────┐
+                    │   SCHEMA_BLUEPRINT   │
+                    │  customers: 9 cols   │
+                    │  products:  6 cols   │
+                    │  orders:    8 cols   │
+                    │  pos:       8 cols   │
+                    └───────┬──────────────┘
+                            │
+                ┌───────────┴───────────┐
+                ▼                       ▼
+       ┌──────────────────┐   ┌──────────────────────┐
+       │  Missing column  │   │  Extra column        │
+       │  Type mismatch   │   │  (not in blueprint)  │
+       │                  │   │                      │
+       │  CRITICAL        │   │  WARNING             │
+       │  → file moved to │   │  → pipeline continues│
+       │    rejected_schemas │  → amber alert fired  │
+       │  → red alert     │   │                      │
+       │  → pipeline halts│   │                      │
+       │  → exit code 2   │   │                      │
+       └──────────────────┘   └──────────────────────┘
 ```
 
-### Alerting Pipeline
+### Idempotent Loading Strategy
 
-The alerting engine (`scripts/alerts.py`) dispatches colour-coded messages to a Discord (embed) or Slack (Block Kit) webhook at three pipeline states:
+| Source Type | Strategy | Mechanism |
+|-------------|----------|-----------|
+| CSV (customers, products, orders) | **Clean Slate** | `TRUNCATE TABLE ... RESTART IDENTITY CASCADE` → `to_sql(if_exists="append")` |
+| JSON (pos_store_sales) | **Replace** | `to_sql(if_exists="replace")` |
+| Unified transactions | **Upsert MERGE** | `INSERT ... ON CONFLICT (transaction_id, source_system) DO UPDATE SET ...` |
 
-| Event | Colour | Payload |
-|-------|--------|---------|
-| Ingestion DLQ has rejected rows | Amber | Loaded / Rejected / Rejection Rate % |
-| dbt test failure | Red | Per-test unique_id, status, execution_time, database message (from `run_results.json`) |
-| Pipeline complete | Green | Total steps, duration, DLQ count |
+This guarantees that running the pipeline 10 times on the same data batch produces exactly the same warehouse state with zero duplicate rows.
 
-Graceful fallback: if `PIPELINE_WEBHOOK_URL` is not set, alerts are silently skipped. A webhook failure never crashes the pipeline.
+### Alerting Engine
 
-### Incremental Loading
+`scripts/alerts.py` dispatches colour-coded messages to Discord or Slack webhooks:
 
-`fct_orders` uses dbt's incremental materialisation with `unique_key='order_id'`:
+| Event | Colour | Payload Contents |
+|-------|--------|------------------|
+| **Schema Drift Critical** | Red | Entity name, missing columns, type mismatches, quarantined file path |
+| **Schema Drift Warning** | Amber | Entity name, extra column names |
+| **DLQ Rejected Rows** | Amber | Loaded count, rejected count, rejection rate % |
+| **dbt Test Failure** | Red | Per-test unique ID, status, execution time, database message (from `run_results.json`) |
+| **Pipeline Complete** | Green | Total steps, duration, DLQ summary |
 
-- First run: loads full history (empty target table)
-- Subsequent runs: `WHERE order_date >= (SELECT MAX(order_date) FROM {{ this }})` — processes only new/changed data
-- The orchestrator passes `--full-refresh` on `marts` each run so FK relationships stay in sync with fully-rebuilt dimension tables
+Webhook failures are gracefully handled with Discord embed → plain-text fallback. Alerts never crash the pipeline.
+
+### dbt Incremental Materialisation
+
+`fct_orders` uses dbt's incremental model with `unique_key='order_id'`. The orchestrator passes `--full-refresh` on `marts` each run so dimension tables (FK references) stay in sync:
+
+```sql
+{{ config(materialized='incremental', unique_key='order_id') }}
+SELECT ...
+{% if is_incremental() %}
+  WHERE order_date >= (SELECT MAX(order_date) FROM {{ this }})
+{% endif %}
+```
 
 ---
 
-## Data Profiles
+## Dual Virtual Environment Strategy
 
-| Profile | Customers | Products | Orders | POS Sales | Runtime |
-|---------|-----------|----------|--------|-----------|---------|
-| small | 1,000 | 100 | 10,000 | 3,000 | ~45s |
-| medium | 10,000 | 500 | 100,000 | 30,000 | ~3m |
-| large | 100,000 | 5,000 | 1,000,000 | 300,000 | ~30m |
+`dbt-core` 1.7 pins `mashumaro<4`. Airflow and Great Expectations require `mashumaro>=4`. These cannot coexist in a single `pip install`:
 
-```bash
-.venv\Scripts\python scripts\orchestrate.py --profile small
-.venv\Scripts\python scripts\orchestrate.py --profile large
+| Environment | Location | Contents | Used By |
+|-------------|----------|----------|---------|
+| **Main** | `.venv/` | pandas, SQLAlchemy, streamlit, airflow, great_expectations, openpyxl, pytest, flake8, black, Faker, requests, networkx, matplotlib, python-dotenv | Steps 1, 2, 5, 7, 8; dashboard; tests; health check |
+| **dbt** | `.venv-dbt/` | `dbt-core==1.7.14`, `dbt-postgres==1.7.14` | Steps 3, 4, 6; dbt debug, dbt parse |
+
+The orchestrator resolves the correct executable per step:
+
+```python
+def _py_exe():   # → .venv/Scripts/python.exe (Win) or sys.executable (Linux)
+def _dbt_exe():  # → .venv-dbt/Scripts/dbt.exe (Win) or $DBT_EXECUTABLE (Linux/container)
 ```
+
+---
+
+## Data Scale Profiles
+
+| Profile | `--profile` | Customers | Products | Orders | POS Sales | Runtime |
+|---------|-------------|-----------|----------|--------|-----------|---------|
+| Small | `small` | 1,000 | 100 | 10,000 | 3,000 | ~45s |
+| Medium | `medium` | 10,000 | 500 | 100,000 | 30,000 | ~3m |
+| Large | `large` | 100,000 | 5,000 | 1,000,000 | 300,000 | ~30m |
 
 ---
 
 ## Testing
 
 ```bash
-# Full suite (77 tests)
+# Full suite (77+ tests)
 .venv\Scripts\pytest tests/ -v --tb=short
 
 # With coverage
 .venv\Scripts\pytest tests/ --cov=scripts/ --cov-report=term-missing
 
-# Run a single test file
+# Single test file
 .venv\Scripts\pytest tests/test_transformations.py -v
 ```
 
-| Test File | Coverage | What It Validates |
-|-----------|----------|-------------------|
+| Test File | Coverage | Validates |
+|-----------|----------|-----------|
 | `test_generate_data.py` | Row counts, columns, valid ranges | Faker output correctness |
 | `test_transformations.py` | Cents→dollars, discount calc, status normalisation | Business logic |
 | `test_load_to_postgres.py` | Engine creation, schema, truncation | DB connectivity |
-| `test_project_status.py` | Docker, Postgres, env, CSVs, overall status | Pipeline health logic |
-| `test_excel_export.py` | Workbook, sheets, headers, styling, currency | Export formatting |
+| `test_project_status.py` | Docker, PostgreSQL, env, CSVs, status aggregation | Pipeline health logic |
+| `test_excel_export.py` | Workbook, sheets, headers, styling, currency format | Export formatting |
 | `test_generate_data_profiles.py` | CLI defaults, overrides, parsing | Argument resolution |
+
+---
+
+## CI/CD Pipeline
+
+On every push/PR to `main`/`master`, GitHub Actions executes two parallel jobs against a shared PostgreSQL 15 service container:
+
+| Job | Steps | Purpose |
+|-----|-------|---------|
+| **Core Python** | `flake8` lint → `black --check` → `pytest` (77+ tests) | Code quality + regression detection |
+| **dbt Validation** | `pip install dbt-core dbt-postgres` → `CREATE SCHEMA raw` → `dbt debug` → `dbt parse` | SQL compilation check — validates all models, refs, sources, macros |
+
+---
+
+## Generated Artifacts
+
+| Artifact | Tool | Location | Description |
+|----------|------|----------|-------------|
+| **Lineage Graph** | `generate_lineage.py` (NetworkX + matplotlib) | `docs/lineage/current_data_lineage.png` | Colour-coded 200 DPI PNG — staging (green) → intermediate (blue) → marts (gold) |
+| **Data Profile** | `generate_profiling.py` (pandas) | `docs/profiling/retailflow_data_profile.html` | Interactive HTML — per-column missing %, cardinality flags, numeric summary, top values |
+| **dbt Docs** | `dbt docs generate` | `dbt/target/` (via `make docs` at localhost:8080) | Browsable catalog, column metadata, interactive DAG, test dashboard |
+| **Excel Export** | `src/exports/excel_exporter.py` (openpyxl) | `outputs/retail_analytics_*.xlsx` | Styled workbook — Top Customers, Monthly Sales, Category Performance, Cohort Analysis |
 
 ---
 
@@ -273,38 +302,74 @@ Graceful fallback: if `PIPELINE_WEBHOOK_URL` is not set, alerts are silently ski
 .venv\Scripts\python scripts/project_status.py
 ```
 
-Checks Docker, PostgreSQL, `.env` file, raw CSVs, database row counts, and schema drift quarantine. Exits with code 0 (healthy), 1 (degraded), or 2 (unhealthy) with fix hints.
-
----
-
-## CI/CD Pipeline
-
-On every push/PR to `main`/`master`, GitHub Actions runs two jobs against a live PostgreSQL service container:
-
-| Job | Steps |
-|-----|-------|
-| **Core Python** | `flake8` lint → `black --check` → `pytest` (77 tests) |
-| **dbt Validation** | `pip install dbt-core` → `dbt debug` → `dbt parse` |
+Validates 6 dimensions: Docker Desktop → PostgreSQL container → `.env` file → raw CSV files → database row counts → schema drift quarantine. Exits with code 0 (healthy), 1 (degraded), or 2 (unhealthy) with actionable fix hints.
 
 ---
 
 ## Learning Path
 
-This project teaches, in order:
+This project teaches, in progression order:
 
-1. **Python data engineering** — pandas, SQLAlchemy, Faker, logging, type hints
-2. **SQL transformations** — dbt models, Jinja macros, star schema design
-3. **Data quality** — dbt tests (not_null, unique, relationships, accepted_values), run_results.json parsing
+1. **Python Data Engineering** — pandas, SQLAlchemy, Faker, logging, type hints, argparse
+2. **SQL Transformations** — dbt models, Jinja macros, star schema design, incremental materialisation
+3. **Data Quality** — dbt tests (not_null, unique, relationships, accepted_values), run_results.json parsing
 4. **Orchestration** — circuit breaker pattern, virtual environment switching, streaming subprocess output
 5. **Observability** — Discord/Slack webhooks, colour-coded embeds, rich failure metadata
-6. **Schema governance** — drift detection, blueprint enforcement, quarantine
-7. **CI/CD** — GitHub Actions, service containers, linting, format checking
-8. **Containerization** — Docker Compose, multi-stage builds, dual-venv runtime
-9. **Visualisation** — Streamlit dashboards, Plotly charts, NetworkX lineage graphs
-10. **Documentation** — dbt docs, auto-generated lineage blueprints, architecture docs
+6. **Schema Governance** — drift detection, blueprint enforcement, graduated severity, file quarantine
+7. **Warehouse Idempotency** — TRUNCATE + INSERT, upsert MERGE, deterministic re-runs
+8. **CI/CD** — GitHub Actions, service containers, linting, format checking, SQL compilation
+9. **Containerisation** — Docker Compose, multi-stage builds, dual-venv runtime environment
+10. **Visualisation** — Streamlit dashboards, Plotly charts, NetworkX lineage graphs
+11. **Documentation** — dbt docs, auto-generated lineage blueprints, architecture docs, data profiles
 
 ---
 
-## License
+## Project Structure
 
-Educational use. Free to modify and share.
+```
+retailflow-pipeline/
+│
+├── .venv/                  # Core Python env — data gen, loading, dashboard, tests
+├── .venv-dbt/              # Isolated dbt env — dbt-core, dbt-postgres only
+│
+├── scripts/                # Core pipeline scripts
+│   ├── orchestrate.py      # 8-step orchestrator + circuit breaker + alerting
+│   ├── generate_fake_data.py   # Faker synthetic data (CSV + JSON)
+│   ├── load_to_postgres.py     # Hybrid ingestion + schema drift detector + PII hash + unified upsert
+│   ├── generate_lineage.py     # NetworkX lineage graph renderer
+│   ├── generate_profiling.py   # Pandas data profiling → HTML report
+│   ├── alerts.py               # Discord/Slack webhook dispatcher
+│   └── project_status.py       # End-to-end pipeline health check
+│
+├── src/
+│   ├── dashboard/app.py        # Streamlit KPI dashboard
+│   └── exports/excel_exporter.py   # Styled Excel workbook export
+│
+├── dbt/                     # dbt project
+│   ├── models/              # 7 SQL models (staging/intermediate/marts)
+│   ├── tests/               # 2 custom singular tests
+│   ├── macros/              # Jinja SQL macros
+│   ├── profiles.yml         # DB connection (env-var driven)
+│   └── dbt_project.yml      # dbt project config
+│
+├── .github/workflows/       # CI/CD — lint, test, dbt parse on every push
+├── docker-compose.yml       # PostgreSQL 15 + app + pgAdmin
+├── Dockerfile               # Multi-stage, dual-venv image
+├── Makefile                 # Dev workflow commands
+├── sql/                     # Schema DDL + analytics queries
+├── tests/                   # 77+ pytest tests
+├── data/
+│   ├── raw/                 # Generated source files (gitignored)
+│   ├── rejected/            # Dead Letter Queue (gitignored)
+│   └── rejected_schemas/    # Schema drift quarantine (gitignored)
+├── docs/
+│   ├── lineage/             # Auto-generated lineage PNG
+│   └── profiling/           # Interactive HTML profile reports
+└── outputs/                 # Excel exports (gitignored)
+```
+
+---
+
+## Licence
+
+Educational use. Free to modify and share. Built as a learning portfolio project.
