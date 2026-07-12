@@ -5,7 +5,7 @@
 # Type `make help` to see all available commands.
 # =============================================================================
 
-.PHONY: help setup setup-dbt run stop clean test lint format status export dashboard pipeline docs
+.PHONY: help setup setup-dbt run stop clean clean-rejected test coverage lint format status export dashboard pipeline docs dbt-run dbt-test sql-analyze generate-data load-data
 
 help:  # Print available commands with descriptions
 	@echo "RetailFlow Pipeline — Available Commands"
@@ -17,18 +17,20 @@ help:  # Print available commands with descriptions
 	@echo "  make generate-data  Run the fake data generation script"
 	@echo "  make load-data      Load generated CSV data into PostgreSQL raw schema"
 	@echo "  make setup-dbt      Create isolated venv for dbt (avoids mashumaro conflicts)"
-	@echo "  make dbt-run        Execute all dbt models (staging → intermediate → marts)"
+	@echo "  make dbt-run        Execute all dbt models (staging -> intermediate -> marts)"
 	@echo "  make dbt-test       Run dbt data tests on all models"
-	@echo "  make sql-analyze    Run all 4 analytics queries against the warehouse"
-	@echo "  make test           Run pytest unit tests"
-	@echo "  make status         Run end-to-end pipeline health check"
+	@echo "  make pipeline       Run full 8-step pipeline end-to-end via orchestrator"
+	@echo "  make test           Run pytest unit tests (77+ tests)"
+	@echo "  make coverage       Run pytest with coverage report"
+	@echo "  make status         Run end-to-end pipeline health check (7 dimensions)"
 	@echo "  make export         Export analytics to styled Excel workbook"
-	@echo "  make pipeline       Run full pipeline end-to-end via orchestrator"
 	@echo "  make dashboard      Launch the Streamlit analytics dashboard"
-	@echo "  make docs           Launch the dbt docs metadata portal in browser (run pipeline first)"
+	@echo "  make docs           Launch the dbt docs metadata portal in browser"
 	@echo "  make lint           Run flake8 linting on all Python files"
 	@echo "  make format         Auto-format Python code with black"
-	@echo "  make clean          Remove generated data, Python cache, and Docker volumes"
+	@echo "  make sql-analyze    Run all 4 analytics queries against the warehouse"
+	@echo "  make clean          Remove both venvs, generated data, Docker volumes"
+	@echo "  make clean-rejected Remove DLQ rejected files and schema drift quarantine"
 	@echo ""
 
 setup:  # Install dependencies, create .env if missing, pull Docker images
@@ -74,13 +76,13 @@ setup-dbt:  # Create and install the isolated dbt virtual environment
 	@.venv-dbt\Scripts\pip install dbt-core==1.7.14 dbt-postgres==1.7.14
 	@echo ">> dbt environment ready. Use '.venv-dbt\\Scripts\\dbt' for dbt commands."
 
-dbt-run:  # Execute dbt models (staging → intermediate → marts)
+dbt-run:  # Execute dbt models (staging -> intermediate -> marts; marts full-refresh)
 	@echo ">> Running dbt staging models..."
 	@cd dbt && ..\.venv-dbt\Scripts\dbt run --select staging
 	@echo ">> Running dbt intermediate models..."
 	@cd dbt && ..\.venv-dbt\Scripts\dbt run --select intermediate
-	@echo ">> Running dbt mart models..."
-	@cd dbt && ..\.venv-dbt\Scripts\dbt run --select marts
+	@echo ">> Running dbt mart models (full-refresh)..."
+	@cd dbt && ..\.venv-dbt\Scripts\dbt run --select marts --full-refresh
 	@echo ">> All dbt models executed."
 
 dbt-test:  # Run dbt data tests
@@ -88,16 +90,16 @@ dbt-test:  # Run dbt data tests
 	@cd dbt && ..\.venv-dbt\Scripts\dbt test
 	@echo ">> dbt tests complete."
 
-sql-analyze:  # Execute all 4 analytics queries and show results
+sql-analyze:  # Execute all 4 analytics queries against the warehouse
 	@echo ">> Running analytics queries..."
 	@echo "=== Top Customers by Revenue ==="
-	@type sql\analytics\top_customers_by_revenue.sql | .venv\Scripts\python -c "import sys; from pathlib import Path; sys.stdin.read()" 2>nul || echo "Run manually: psql -d retailflow -f sql/analytics/top_customers_by_revenue.sql"
+	@.venv\Scripts\python -c "from sqlalchemy import create_engine, text; import os; e = create_engine(f'postgresql://{os.getenv(\"POSTGRES_USER\",\"retailflow_user\")}:{os.getenv(\"POSTGRES_PASSWORD\",\"retailflow_pass\")}@{os.getenv(\"POSTGRES_HOST\",\"localhost\")}:{os.getenv(\"POSTGRES_PORT\",\"5432\")}/{os.getenv(\"POSTGRES_DB\",\"retailflow\")}'); import pathlib; q = pathlib.Path('sql/analytics/top_customers_by_revenue.sql').read_text(); r = e.execute(text(q)); [print(row) for row in r]"
 	@echo "=== Monthly Sales Trend ==="
-	@echo "Run manually: psql -d retailflow -f sql/analytics/monthly_sales_trend.sql"
+	@.venv\Scripts\python -c "from sqlalchemy import create_engine, text; import os; e = create_engine(f'postgresql://{os.getenv(\"POSTGRES_USER\",\"retailflow_user\")}:{os.getenv(\"POSTGRES_PASSWORD\",\"retailflow_pass\")}@{os.getenv(\"POSTGRES_HOST\",\"localhost\")}:{os.getenv(\"POSTGRES_PORT\",\"5432\")}/{os.getenv(\"POSTGRES_DB\",\"retailflow\")}'); import pathlib; q = pathlib.Path('sql/analytics/monthly_sales_trend.sql').read_text(); r = e.execute(text(q)); [print(row) for row in r]"
 	@echo "=== Product Category Performance ==="
-	@echo "Run manually: psql -d retailflow -f sql/analytics/product_category_performance.sql"
+	@.venv\Scripts\python -c "from sqlalchemy import create_engine, text; import os; e = create_engine(f'postgresql://{os.getenv(\"POSTGRES_USER\",\"retailflow_user\")}:{os.getenv(\"POSTGRES_PASSWORD\",\"retailflow_pass\")}@{os.getenv(\"POSTGRES_HOST\",\"localhost\")}:{os.getenv(\"POSTGRES_PORT\",\"5432\")}/{os.getenv(\"POSTGRES_DB\",\"retailflow\")}'); import pathlib; q = pathlib.Path('sql/analytics/product_category_performance.sql').read_text(); r = e.execute(text(q)); [print(row) for row in r]"
 	@echo "=== Customer Cohort Analysis ==="
-	@echo "Run manually: psql -d retailflow -f sql/analytics/customer_cohort_analysis.sql"
+	@.venv\Scripts\python -c "from sqlalchemy import create_engine, text; import os; e = create_engine(f'postgresql://{os.getenv(\"POSTGRES_USER\",\"retailflow_user\")}:{os.getenv(\"POSTGRES_PASSWORD\",\"retailflow_pass\")}@{os.getenv(\"POSTGRES_HOST\",\"localhost\")}:{os.getenv(\"POSTGRES_PORT\",\"5432\")}/{os.getenv(\"POSTGRES_DB\",\"retailflow\")}'); import pathlib; q = pathlib.Path('sql/analytics/customer_cohort_analysis.sql').read_text(); r = e.execute(text(q)); [print(row) for row in r]"
 
 status:  # Run the end-to-end pipeline health check
 	@echo ">> Running pipeline health check..."
@@ -123,10 +125,15 @@ docs:  # Generate dbt docs artifacts and launch the metadata portal in a browser
 	@echo ">> Starting dbt docs server at http://localhost:8080..."
 	@cd dbt && ..\.venv-dbt\Scripts\dbt docs serve
 
-test:  # Run pytest unit tests
+test:  # Run pytest unit tests (77+ tests)
 	@echo ">> Running unit tests..."
 	@.venv\Scripts\pytest tests\ -v --tb=short
 	@echo ">> Tests complete."
+
+coverage:  # Run pytest with coverage report
+	@echo ">> Running unit tests with coverage..."
+	@.venv\Scripts\pytest tests\ --cov=scripts/ --cov=src/ --cov-report=term-missing
+	@echo ">> Coverage complete."
 
 lint:  # Run flake8 linting on all Python files
 	@echo ">> Running flake8 linter..."
@@ -137,6 +144,13 @@ format:  # Auto-format all Python code with black
 	@echo ">> Formatting Python code with black..."
 	@.venv\Scripts\black scripts\ airflow\ tests\
 	@echo ">> Formatting complete."
+
+clean-rejected:  # Remove DLQ files, schema drift quarantine, and outputs
+	@echo ">> Cleaning rejected and quarantine directories..."
+	@if exist "data\rejected\*.csv" del /q data\rejected\*.csv 2>nul
+	@if exist "data\rejected_schemas\*.*" del /q data\rejected_schemas\*.* 2>nul
+	@if exist "outputs\*.xlsx" del /q outputs\*.xlsx 2>nul
+	@echo ">> Clean rejected complete."
 
 clean:  # Remove generated data, Python cache, Docker volumes, and both virtual environments
 	@echo ">> Cleaning generated data..."

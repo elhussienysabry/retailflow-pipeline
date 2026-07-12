@@ -32,7 +32,7 @@ import logging
 import os
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 import pandas as pd
@@ -41,14 +41,29 @@ from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
 
+# ── Alerting (self-contained dispatch for standalone runs) ────────────────
+# Graceful import: if called from the orchestrator, the alerts module
+# may be importable via the package path or the sibling path.
+_ALERTS_AVAILABLE = False
+send_pipeline_alert = None  # type: ignore
+try:
+    from scripts.alerts import send_pipeline_alert  # noqa: E402
+    _ALERTS_AVAILABLE = True
+except ImportError:
+    try:
+        from alerts import send_pipeline_alert  # noqa: E402, F811
+        _ALERTS_AVAILABLE = True
+    except ImportError:
+        pass
+
 SOURCE_MAP: List[Tuple[str, str, str]] = [
-    # (filename,       table_name,          file_type)
     ("customers.csv", "raw.customers", "csv"),
     ("products.csv", "raw.products", "csv"),
     ("orders.csv", "raw.orders", "csv"),
     ("pos_store_sales.json", "raw.pos_store_sales", "json"),
 ]
 
+# Base dtype map for source columns (execution tracking added at load time).
 DTYPE_MAP: Dict[str, object] = {
     "customer_id": "string",
     "product_id": "string",
@@ -445,17 +460,16 @@ def _write_dlq(entity_name: str, rejected_df: pd.DataFrame) -> None:
 
 
 def _load_json_to_table(
-    engine: Engine, json_filename: str, table_name: str
+    engine: Engine,
+    json_filename: str,
+    table_name: str,
+    execution_date: str,
 ) -> int:
-    """Load a JSON file of records directly into a PostgreSQL table.
+    """Load a JSON file of records into a PostgreSQL table (idempotent).
 
-    Args:
-        engine: SQLAlchemy Engine instance.
-        json_filename: e.g. 'pos_store_sales.json'.
-        table_name: e.g. 'raw.pos_store_sales'.
-
-    Returns:
-        Number of rows loaded.
+    Appends an ``_execution_date`` column, deletes any prior rows with the
+    same execution date, then inserts.  Re-running on the same date is
+    idempotent — zero duplicates.
     """
     data_dir = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
     filepath = os.path.join(data_dir, json_filename)
@@ -475,15 +489,23 @@ def _load_json_to_table(
         return 0
 
     df = pd.DataFrame(records)
+    df["_execution_date"] = execution_date
+
+    # Idempotent: remove any rows from a prior run on the same date.
+    delete_by_execution_date(engine, table_name, execution_date)
+
     df.to_sql(
         table_name.split(".")[1],
         engine,
         schema="raw",
-        if_exists="replace",
+        if_exists="append",
         index=False,
         method="multi",
     )
-    logger.info("Loaded %d rows into %s", len(df), table_name)
+    logger.info(
+        "Loaded %d rows into %s (execution_date=%s)",
+        len(df), table_name, execution_date,
+    )
     return len(df)
 
 
@@ -655,31 +677,78 @@ def ensure_raw_schema(engine: Engine) -> None:
     logger.info("Ensured raw schema exists.")
 
 
-def truncate_table(engine: Engine, table_name: str) -> None:
-    """Remove all rows from a table (idempotent load)."""
+def delete_by_execution_date(
+    engine: Engine, table_name: str, execution_date: str
+) -> None:
+    """Idempotent clean-up: delete rows matching the current execution date.
+
+    Removes all records from *table_name* whose ``_execution_date`` matches
+    the current run's date.  This ensures that re-running the pipeline on
+    the same calendar day produces exactly the same warehouse state with
+    zero duplicate rows, while preserving data from prior runs.
+
+    The ``_execution_date`` column is added via ALTER TABLE if not present,
+    so the migration is self-healing across schema versions.
+    """
     with engine.connect() as conn:
-        conn.exec_driver_sql(
-            f"TRUNCATE TABLE {table_name} RESTART IDENTITY CASCADE;"
-        )
+        # Self-healing migration: add the column if the table already exists
+        # without it (e.g. after a schema upgrade).
+        col_check = conn.execute(
+            text(
+                f"SELECT EXISTS ("
+                f"  SELECT 1 FROM information_schema.columns "
+                f"  WHERE table_schema = '{table_name.split('.')[0]}' "
+                f"    AND table_name = '{table_name.split('.')[1]}' "
+                f"    AND column_name = '_execution_date'"
+                f")"
+            )
+        ).scalar()
+        if not col_check:
+            logger.info(
+                "Adding _execution_date column to %s for idempotent load.",
+                table_name,
+            )
+            conn.exec_driver_sql(
+                f"ALTER TABLE {table_name} "
+                f"ADD COLUMN _execution_date DATE;"
+            )
         conn.commit()
-    logger.info("Truncated table: %s", table_name)
+
+        deleted = conn.execute(
+            text(
+                f"DELETE FROM {table_name} "
+                f"WHERE _execution_date = :exec_date"
+            ),
+            {"exec_date": execution_date},
+        ).rowcount
+        conn.commit()
+    logger.info(
+        "Idempotent cleanup: deleted %d row(s) from %s "
+        "for execution_date=%s",
+        deleted, table_name, execution_date,
+    )
 
 
 def load_csv_to_table(
-    engine: Engine, csv_filename: str, table_name: str
+    engine: Engine,
+    csv_filename: str,
+    table_name: str,
+    execution_date: str,
 ) -> Tuple[int, int]:
-    """Read, validate, load clean rows and DLQ rejected rows.
+    """Read, validate, and load clean rows (idempotent).
+
+    Appends an ``_execution_date`` column, deletes any prior rows with the
+    same execution date before inserting, then streams chunks.  Re-running
+    on the same date is idempotent.
 
     Args:
         engine: SQLAlchemy Engine instance.
         csv_filename: e.g. 'orders.csv'.
         table_name: e.g. 'raw.orders'.
+        execution_date: ISO date string for the current run.
 
     Returns:
         (loaded_count, rejected_count).
-
-    Raises:
-        FileNotFoundError: If the CSV file does not exist.
     """
     data_dir = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
     filepath = os.path.join(data_dir, csv_filename)
@@ -690,6 +759,9 @@ def load_csv_to_table(
         )
 
     logger.info("Loading %s → %s ...", filepath, table_name)
+
+    # Idempotent: remove any rows from a prior run on the same date.
+    delete_by_execution_date(engine, table_name, execution_date)
 
     chunk_size = 10_000
     total_loaded = 0
@@ -702,6 +774,9 @@ def load_csv_to_table(
         )
 
         if not clean_chunk.empty:
+            # Tag every row with the current execution date for idempotency.
+            clean_chunk["_execution_date"] = execution_date
+
             # Anonymise PII for customer data before persisting.
             if entity_name == "customer":
                 _anonymize_pii(clean_chunk)
@@ -721,10 +796,12 @@ def load_csv_to_table(
             total_rejected += len(rejected_chunk)
 
     logger.info(
-        "Loaded %d rows into %s, rejected %d to DLQ",
+        "Loaded %d rows into %s, rejected %d to DLQ "
+        "(execution_date=%s)",
         total_loaded,
         table_name,
         total_rejected,
+        execution_date,
     )
     return total_loaded, total_rejected
 
@@ -734,10 +811,21 @@ def load_csv_to_table(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Connect to PostgreSQL, validate, load clean rows, write DLQ."""
+    """Connect to PostgreSQL, validate, load clean rows, write DLQ.
+
+    Every row loaded is tagged with ``_execution_date`` set to today's UTC
+    date.  Before inserting, any rows from a prior run on the same date are
+    deleted — guaranteeing idempotent re-runs (zero duplicates).
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    # ── Generate the idempotency execution date once per run ──────────
+    execution_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    logger.info(
+        "Idempotent run — execution_date=%s", execution_date
     )
 
     start_time = datetime.now()
@@ -769,24 +857,49 @@ def main() -> None:
                     "Schema drift — critical. Pipeline halted "
                     "for %s.", filename
                 )
+                if _ALERTS_AVAILABLE and send_pipeline_alert:
+                    alert_details: Dict[str, Any] = {
+                        "Entity": drift_details.get("entity", filename),
+                        "Severity": "CRITICAL — Pipeline Halted",
+                        "File": drift_details.get("filepath", ""),
+                    }
+                    missing = drift_details.get("missing_columns", [])
+                    if missing:
+                        alert_details["Missing Columns"] = ", ".join(missing)
+                    mismatches = drift_details.get("type_mismatches", {})
+                    if mismatches:
+                        alert_details["Type Mismatches"] = str(mismatches)
+                    send_pipeline_alert(
+                        status="critical",
+                        stage="schema-drift",
+                        details=alert_details,
+                    )
                 sys.exit(2)
 
             if drift_type == "warning":
                 print(f"SCHEMA_DRIFT_WARNING:{json.dumps(drift_details)}")
+                if _ALERTS_AVAILABLE and send_pipeline_alert:
+                    extra = drift_details.get("extra_columns", [])
+                    send_pipeline_alert(
+                        status="warning",
+                        stage="schema-drift",
+                        details={
+                            "Entity": drift_details.get("entity", filename),
+                            "Severity": "WARNING — Pipeline Continuing",
+                            "Extra Columns": ", ".join(extra),
+                        },
+                    )
 
-            # ── Continue with normal load ───────────────────────
-            # JSON tables are created/replaced by _load_json_to_table,
-            # so skip the truncate step for them.
-            if file_type != "json":
-                truncate_table(engine, table_name)
-
+            # ── Continue with idempotent load ─────────────────────
             if file_type == "json":
-                loaded = _load_json_to_table(engine, filename, table_name)
+                loaded = _load_json_to_table(
+                    engine, filename, table_name, execution_date
+                )
                 grand_loaded += loaded
                 per_table[filename] = {"loaded": loaded, "rejected": 0}
             else:
                 loaded, rejected = load_csv_to_table(
-                    engine, filename, table_name
+                    engine, filename, table_name, execution_date
                 )
                 grand_loaded += loaded
                 grand_rejected += rejected
@@ -811,6 +924,7 @@ def main() -> None:
         )
 
         summary = {
+            "execution_date": execution_date,
             "loaded": grand_loaded,
             "rejected": grand_rejected,
             "tables": per_table,

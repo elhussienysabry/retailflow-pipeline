@@ -136,9 +136,9 @@ retailflow-pipeline/
   |  |  _load_csv_to_    |  |  data/rejected_schemas/     |
   |  |  table() [I]      |  |  File isolated. Never       |
   |  |                   |  |  reaches PostgreSQL.        |
-  |  |  ┌─ TRUNCATE each |  |  Must be reconciled before  |
-  |  |  │  target table  |  |  re-run.                    |
-  |  |  │ Pandas chunks  |  |_____________________________|
+   |  |  ┌─ DELETE each   |  |  Must be reconciled before  |
+   |  |  │  target table  |  |  re-run.                    |
+   |  |  │  by exec_date  |  |_____________________________|
   |  |  │ Validation     |
   |  |  │ guardrails per |
   |  |  │ entity         |
@@ -167,9 +167,8 @@ retailflow-pipeline/
   |  |  raw schema (5 tables):            |
   |  |  ┌──────────────────────────────┐  |
   |  |  │ IDEMPOTENT [I]               │  |
-  |  |  │ TRUNCATE + INSERT (CSV)      │  |
-  |  |  │ to_sql(if_exists="replace")  │  |
-  |  |  │  (JSON)                      │  |
+   |  |  │ DELETE + INSERT (CSV)        │  |
+   |  |  │ DELETE + INSERT (JSON)       │  |
   |  |  └──────────────────────────────┘  |
   |  |  raw.customers  raw.orders         |
   |  |  raw.products   raw.pos_store_sales|
@@ -424,7 +423,7 @@ for each (filename, table_name, file_type) in SOURCE_MAP:
        → WARNING:  print marker, continue
        → NONE:     continue
 
-    2. truncate_table(engine, table_name)         [CSV only]
+    2. delete_by_execution_date(engine, table_name, execution_date)   [all source types]
     3. load_csv_to_table() or _load_json_to_table()
 
     4. _harmonize_and_upsert_unified(engine)      [after all 4 sources]
@@ -483,8 +482,8 @@ After all raw source tables are loaded, `_harmonize_and_upsert_unified()` create
 
 | Source Type | Strategy | Code Path | Schema |
 |-------------|----------|-----------|--------|
-| **CSV** (customers, products, orders) | **Clean Slate** — `TRUNCATE TABLE ... RESTART IDENTITY CASCADE` → `pandas.to_sql(if_exists="append")` | `truncate_table()` + `load_csv_to_table()` via `chunksize=10_000` + `method="multi"` | `raw.*` |
-| **JSON** (pos_store_sales) | **Replace** — `pandas.to_sql(if_exists="replace")` | `_load_json_to_table()` | `raw.pos_store_sales` |
+| **CSV** (customers, products, orders) | **Delete + Insert** — `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` → `pandas.to_sql(if_exists="append")` | `delete_by_execution_date()` + `load_csv_to_table()` via `chunksize=10_000` + `method="multi"` | `raw.*` |
+| **JSON** (pos_store_sales) | **Delete + Insert** — `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` → `pandas.to_sql(if_exists="append")` | `delete_by_execution_date()` + `_load_json_to_table()` | `raw.pos_store_sales` |
 | **Unified** (online + POS) | **Upsert MERGE** — `INSERT ... ON CONFLICT DO UPDATE` | `_harmonize_and_upsert_unified()` | `raw.unified_transactions` |
 
 This design guarantees that re-running the pipeline N times on the same data batch produces exactly the same warehouse state with zero duplicate rows across all tables.
@@ -493,10 +492,10 @@ This design guarantees that re-running the pipeline N times on the same data bat
 
 ```
 raw          (schema)  — 5 tables, managed by load_to_postgres.py
-├── customers              ← TRUNCATE + INSERT (idempotent)
-├── products               ← TRUNCATE + INSERT (idempotent)
-├── orders                 ← TRUNCATE + INSERT (idempotent)
-├── pos_store_sales        ← to_sql(if_exists="replace") (idempotent)
+├── customers              ← DELETE + INSERT by _execution_date (idempotent)
+├── products               ← DELETE + INSERT by _execution_date (idempotent)
+├── orders                 ← DELETE + INSERT by _execution_date (idempotent)
+├── pos_store_sales        ← DELETE + INSERT by _execution_date (idempotent)
 └── unified_transactions   ← UPSERT MERGE (idempotent)
 
 staging      (schema)  — 3 views, created by dbt run --select staging
@@ -1000,7 +999,7 @@ make pipeline
 | Step | Component | Environment | What Happens | On Failure |
 |------|-----------|-------------|-------------|------------|
 | 1 | Generate Data | `.venv` | Faker creates 4 source files in `data/raw/` with referential integrity | Exit code 1 → pipeline halts |
-| 2 | Load to PostgreSQL | `.venv` | Schema drift check → TRUNCATE tables → validation guardrails → PII hash → load → DLQ isolation → unified upsert | Exit code 1 (general) or 2 (schema drift); DLQ warning sent |
+| 2 | Load to PostgreSQL | `.venv` | Schema drift check → delete_by_execution_date → validation guardrails → PII hash → load → DLQ isolation → unified upsert | Exit code 1 (general) or 2 (schema drift); DLQ warning sent |
 | 3 | dbt Run | `.venv-dbt` | 3 sub-steps: staging (views) → intermediate (view) → marts (tables, full-refresh) | Exit code 1 → pipeline halts mid-substep |
 | 4 | dbt Test | `.venv-dbt` | 48 data quality tests; `run_results.json` parsed for failure metadata | Critical alert with per-test details → pipeline halts |
 | 5 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | Exit code 1 → pipeline halts |
