@@ -214,6 +214,10 @@ class TestMoveToRejectedSchemas:
         with tempfile.TemporaryDirectory() as tmpdir:
             raw_dir = Path(tmpdir) / "data" / "raw"
             raw_dir.mkdir(parents=True)
+            # The function resolves ".." from the scripts dir, so we must
+            # create that path for OS-level path resolution to succeed.
+            scripts_dir = Path(tmpdir) / "scripts"
+            scripts_dir.mkdir()
             src_file = raw_dir / "test.csv"
             src_file.write_text("a,b\n1,2\n")
 
@@ -222,7 +226,7 @@ class TestMoveToRejectedSchemas:
                 str(Path(tmpdir) / "data" / "rejected_schemas"),
             ), patch(
                 "scripts.load_to_postgres.os.path.dirname",
-                return_value=str(Path(tmpdir) / "scripts"),
+                return_value=str(scripts_dir),
             ):
                 dest = _move_to_rejected_schemas("test.csv")
                 assert not src_file.exists()
