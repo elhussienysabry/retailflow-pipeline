@@ -10,7 +10,6 @@ Verifies that:
     - Schema drift detection flags missing / extra columns
 """
 
-import json
 import os
 import sys
 import tempfile
@@ -37,7 +36,6 @@ from scripts.load_to_postgres import (  # noqa: E402
     _validate_and_split,
     _write_dlq,
     _move_to_rejected_schemas,
-    SCHEMA_BLUEPRINT,
 )
 
 
