@@ -131,6 +131,22 @@ _last_dlq_data: Dict[str, Any] = {}
 _last_schema_drift_critical: List[Dict[str, Any]] = []
 _last_schema_drift_warning: List[Dict[str, Any]] = []
 
+# ── SLA & Performance Telemetry ─────────────────────────────────────────
+# Phase groupings — each step maps to exactly one phase.
+_PHASE_MAP: Dict[str, str] = {
+    "Generate Data": "Ingestion",
+    "Load to PostgreSQL": "Ingestion",
+    "dbt Run": "Transformation",
+    "dbt Test": "Transformation",
+    "Excel Export": "Consumption",
+    "dbt Docs Generate": "Consumption",
+    "Lineage Graph Export": "Consumption",
+    "Data Profile Report": "Consumption",
+}
+# Default SLA threshold: if total runtime exceeds this (seconds), the
+# success alert is elevated to an amber SLA warning.
+_DEFAULT_SLA_SECONDS = 60.0
+
 
 class CommandResult(NamedTuple):
     """Result of a subprocess execution with captured output lines."""
@@ -430,23 +446,43 @@ def _send_step_failure_alert(step_name: str, rc: int) -> None:
         )
 
 
-def _send_success_alert(total_elapsed: float) -> None:
-    """Dispatch a success alert at the end of the pipeline."""
+def _send_success_alert(
+    total_elapsed: float,
+    phase_durations: Dict[str, float],
+    sla_seconds: float = _DEFAULT_SLA_SECONDS,
+) -> None:
+    """Dispatch a success or SLA-warning alert.
+
+    If *total_elapsed* exceeds *sla_seconds*, the status is elevated to
+    ``"warning"`` (amber) and an ``SLA Breach`` stage is reported.
+    """
     if not _ALERTS_AVAILABLE:
         return
 
+    sla_breached = total_elapsed > sla_seconds
+
     details: Dict[str, Any] = {
         "Total Steps": len(PIPELINE_STEPS),
-        "Duration": f"{total_elapsed:.2f}s",
+        "Total Runtime": f"{total_elapsed:.2f}s",
+        "Ingestion": f"{phase_durations.get('Ingestion', 0):.2f}s",
+        "Transformation": f"{phase_durations.get('Transformation', 0):.2f}s",
+        "Consumption": f"{phase_durations.get('Consumption', 0):.2f}s",
+        "SLA (max)": f"{sla_seconds:.0f}s",
     }
+
+    if sla_breached:
+        details["SLA Status"] = f"\u26A0\uFE0F BREACHED ({total_elapsed:.2f}s > {sla_seconds:.0f}s)"
 
     rejected = _last_dlq_data.get("rejected", 0)
     if rejected is not None and rejected > 0:
         details["DLQ Rejected"] = rejected
 
+    status = "warning" if sla_breached else "success"
+    stage = "sla-breach" if sla_breached else "pipeline-complete"
+
     send_pipeline_alert(
-        status="success",
-        stage="pipeline-complete",
+        status=status,
+        stage=stage,
         details=details,
     )
 
@@ -599,6 +635,16 @@ def parse_args() -> argparse.Namespace:
         choices=["small", "medium", "large"],
         help="Scale profile passed to the data generator (default: medium)",
     )
+    parser.add_argument(
+        "--sla-seconds",
+        type=float,
+        default=_DEFAULT_SLA_SECONDS,
+        help=(
+            "SLA threshold in seconds. If total runtime exceeds this, "
+            "the final alert is elevated to amber SLA warning "
+            "(default: %s)" % _DEFAULT_SLA_SECONDS
+        ),
+    )
     return parser.parse_args()
 
 
@@ -630,6 +676,9 @@ def main() -> None:
     print("+" + "=" * 70 + "+")
     print()
 
+    # ── Phase duration tracking ─────────────────────────────────────────
+    phase_durations: Dict[str, float] = {"Ingestion": 0.0, "Transformation": 0.0, "Consumption": 0.0}
+
     for step_num, (step_name, step_fn) in enumerate(PIPELINE_STEPS, start=1):
         print(_step_box(step_num, total_steps, step_name))
         step_start = time.monotonic()
@@ -649,6 +698,10 @@ def main() -> None:
             rc = -1
 
         elapsed = time.monotonic() - step_start
+
+        # Accumulate phase duration.
+        phase = _PHASE_MAP.get(step_name, "Consumption")
+        phase_durations[phase] = phase_durations.get(phase, 0.0) + elapsed
 
         if rc == 0:
             logger.info(STEP_OK.format(name=step_name, elapsed=elapsed))
@@ -680,15 +733,27 @@ def main() -> None:
         print()
 
     total_elapsed = time.monotonic() - pipeline_start
-    _send_success_alert(total_elapsed)
+    sla_breached = total_elapsed > args.sla_seconds
+    _send_success_alert(total_elapsed, phase_durations, args.sla_seconds)
 
     print()
+    phase_line = (
+        "|  Ingestion: {ing:.2f}s  |  Transformation: {tx:.2f}s"
+        "  |  Consumption: {con:.2f}s"
+    ).format(
+        ing=phase_durations.get("Ingestion", 0),
+        tx=phase_durations.get("Transformation", 0),
+        con=phase_durations.get("Consumption", 0),
+    )
+    sla_status = "SLA BREACHED" if sla_breached else "SLA OK"
+    print()
     print("+" + "=" * 70 + "+")
-    print("|  OK  PIPELINE COMPLETE")
-    msg = "|  All %d steps succeeded in %.2f seconds." % (
-        total_steps, total_elapsed
+    print("|  %s  PIPELINE COMPLETE" % ("WARN" if sla_breached else "OK"))
+    msg = "|  All %d steps succeeded in %.2f seconds.  SLA: %s (max %.0fs)" % (
+        total_steps, total_elapsed, sla_status, args.sla_seconds,
     )
     print(msg)
+    print(phase_line)
     print("+" + "=" * 70 + "+")
     print()
 

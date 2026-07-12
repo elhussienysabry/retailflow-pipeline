@@ -19,6 +19,7 @@ from scripts.project_status import (  # noqa: E402
     check_env_file,
     check_raw_csvs,
     check_database_rows,
+    check_dbt_venv,
     _determine_overall,
     main,
 )
@@ -115,6 +116,41 @@ class TestCheckEnvFile:
             with patch("scripts.project_status.ENV_FILE", missing):
                 status, msg = check_env_file()
                 assert status == "FAIL"
+                assert "not found" in msg.lower()
+
+
+class TestCheckDbtVenv:
+    """Tests for the check_dbt_venv function."""
+
+    @patch("scripts.project_status.sys.platform", "win32")
+    def test_dbt_venv_present_and_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            venv_dir = Path(tmpdir) / ".venv-dbt"
+            scripts_dir = venv_dir / "Scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "dbt.exe").write_text("")
+            with patch("scripts.project_status.DBT_VENV_DIR", venv_dir):
+                status, msg = check_dbt_venv()
+                assert status == "OK"
+                assert "ready" in msg.lower()
+
+    @patch("scripts.project_status.sys.platform", "win32")
+    def test_dbt_venv_dir_exists_but_no_exe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            venv_dir = Path(tmpdir) / ".venv-dbt"
+            venv_dir.mkdir()
+            with patch("scripts.project_status.DBT_VENV_DIR", venv_dir):
+                status, msg = check_dbt_venv()
+                assert status == "WARNING"
+                assert "dbt executable not found" in msg.lower()
+
+    @patch("scripts.project_status.sys.platform", "win32")
+    def test_dbt_venv_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir) / ".venv-dbt"
+            with patch("scripts.project_status.DBT_VENV_DIR", missing):
+                status, msg = check_dbt_venv()
+                assert status == "WARNING"
                 assert "not found" in msg.lower()
 
 
@@ -219,12 +255,16 @@ class TestMain:
     @patch("scripts.project_status.check_docker")
     @patch("scripts.project_status.check_postgres")
     @patch("scripts.project_status.check_env_file")
+    @patch("scripts.project_status.check_dbt_venv")
     @patch("scripts.project_status.check_raw_csvs")
     @patch("scripts.project_status.check_database_rows")
+    @patch("scripts.project_status.check_schema_drift")
     def test_healthy_path(
         self,
+        mock_schema: MagicMock,
         mock_rows: MagicMock,
         mock_csvs: MagicMock,
+        mock_dbt: MagicMock,
         mock_env: MagicMock,
         mock_pg: MagicMock,
         mock_docker: MagicMock,
@@ -232,8 +272,10 @@ class TestMain:
         mock_docker.return_value = ("OK", "Docker running")
         mock_pg.return_value = ("OK", "PostgreSQL reachable")
         mock_env.return_value = ("OK", ".env loaded")
+        mock_dbt.return_value = ("OK", "dbt venv ready")
         mock_csvs.return_value = ("OK", "CSVs present")
         mock_rows.return_value = ("OK", "All tables have data")
+        mock_schema.return_value = ("OK", "No drift detected")
 
         with patch("scripts.project_status.sys.exit") as mock_exit:
             main()
@@ -242,17 +284,23 @@ class TestMain:
     @patch("scripts.project_status.check_docker")
     @patch("scripts.project_status.check_postgres")
     @patch("scripts.project_status.check_env_file")
+    @patch("scripts.project_status.check_dbt_venv")
     @patch("scripts.project_status.check_raw_csvs")
+    @patch("scripts.project_status.check_schema_drift")
     def test_docker_failure_skips_pg(
         self,
+        mock_schema: MagicMock,
         mock_csvs: MagicMock,
+        mock_dbt: MagicMock,
         mock_env: MagicMock,
         mock_pg: MagicMock,
         mock_docker: MagicMock,
     ) -> None:
         mock_docker.return_value = ("FAIL", "Docker not running")
         mock_env.return_value = ("OK", ".env loaded")
+        mock_dbt.return_value = ("OK", "dbt venv ready")
         mock_csvs.return_value = ("OK", "CSVs present")
+        mock_schema.return_value = ("OK", "No drift detected")
 
         with patch("scripts.project_status.sys.exit") as mock_exit:
             main()
@@ -262,12 +310,16 @@ class TestMain:
     @patch("scripts.project_status.check_docker")
     @patch("scripts.project_status.check_postgres")
     @patch("scripts.project_status.check_env_file")
+    @patch("scripts.project_status.check_dbt_venv")
     @patch("scripts.project_status.check_raw_csvs")
     @patch("scripts.project_status.check_database_rows")
+    @patch("scripts.project_status.check_schema_drift")
     def test_degraded_path(
         self,
+        mock_schema: MagicMock,
         mock_rows: MagicMock,
         mock_csvs: MagicMock,
+        mock_dbt: MagicMock,
         mock_env: MagicMock,
         mock_pg: MagicMock,
         mock_docker: MagicMock,
@@ -275,8 +327,10 @@ class TestMain:
         mock_docker.return_value = ("OK", "Docker running")
         mock_pg.return_value = ("OK", "PostgreSQL reachable")
         mock_env.return_value = ("OK", ".env loaded")
+        mock_dbt.return_value = ("OK", "dbt venv ready")
         mock_csvs.return_value = ("WARNING", "Some CSVs missing")
         mock_rows.return_value = ("OK", "All tables have data")
+        mock_schema.return_value = ("OK", "No drift detected")
 
         with patch("scripts.project_status.sys.exit") as mock_exit:
             main()

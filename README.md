@@ -15,7 +15,7 @@
 | # | Achievement | Implementation | Production Relevance |
 |---|-------------|----------------|----------------------|
 | 1 | **Data Schema Evolution & Drift Detection** | `SCHEMA_BLUEPRINT` dictionary in `load_to_postgres.py` enforces per-entity column schemas. Missing columns / type mismatches → file quarantined to `data/rejected_schemas/`, pipeline halts with exit code 2, red alert dispatched. Extra unknown columns → amber warning, pipeline continues. | Prevents silent corruption when upstream source schemas evolve without notice. Graduated severity (Critical / Warning) mirrors real-world SLAs. |
-| 2 | **Warehouse Idempotency & Fault Tolerance** | TRUNCATE + INSERT for CSV sources; `INSERT ... ON CONFLICT (transaction_id, source_system) DO UPDATE` for the unified transactions upsert. Re-running the pipeline on the same data batch produces identical results with zero duplicates. | Guarantees deterministic re-runs — essential for backfills, retries, and incremental refresh cycles without data corruption. |
+| 2 | **Warehouse Idempotency & Fault Tolerance** | `DELETE FROM target WHERE _execution_date = :today` before every batch insert. Each row tagged with the run's UTC date. Unified transactions use `INSERT ... ON CONFLICT DO UPDATE`. Re-running the pipeline N times on the same calendar day produces identical warehouse state with zero duplicates. | Guarantees deterministic re-runs — essential for backfills, retries, and incremental refresh cycles without data corruption. |
 | 3 | **Dual Virtual Environment Strategy** | `.venv/` (pandas, streamlit, airflow) and `.venv-dbt/` (dbt-core 1.7 + dbt-postgres) resolve the `mashumaro<4` vs `mashumaro>=4` dependency conflict between dbt-core and Airflow/Great Expectations. Orchestrator resolves the correct executable per step via `_py_exe()` / `_dbt_exe()`. | Mirrors production runtime isolation patterns — no single `pip install` can satisfy conflicting transitive dependencies. Common in teams running dbt alongside orchestration tools. |
 | 4 | **CI/CD & DevOps Automation** | GitHub Actions workflow (`.github/workflows/ci_cd.yml`) runs `flake8` linting, `black --check` formatting, full 77+ test `pytest` suite, and `dbt debug` + `dbt parse` SQL compilation against a live PostgreSQL 15 service container on every push/PR. | Catches Python regressions, SQL compilation errors, and broken `ref()` chains before merge. Service container pattern eliminates the need for external test databases. |
 | 5 | **Data Quality Circuit Breaker & Graph Lineage** | 48 automated dbt tests across all models. On failure, orchestrator reads `run_results.json`, dispatches per-test metadata (unique ID, status, execution time, database message) to Discord/Slack. After successful run, `generate_lineage.py` builds a `networkx.DiGraph` from `manifest.json` and renders a colour-coded 200 DPI PNG lineage map. | Goes beyond pass/fail — the alert tells the team *exactly* which SLA was breached. The commitable lineage artifact documents data flow without external tooling. |
@@ -66,7 +66,7 @@ make pipeline
 | Step | Component | Environment | What Happens | Duration (small) |
 |------|-----------|-------------|-------------|-------------------|
 | 1 | Generate Data | `.venv` | Faker creates 4 source files (CSV + JSON) in `data/raw/` | ~1.5s |
-| 2 | Load to PostgreSQL | `.venv` | Schema drift check → per-entity validation → PII SHA-256 hash → DLQ isolation → TRUNCATE + INSERT → unified upsert | ~4s |
+| 2 | Load to PostgreSQL | `.venv` | Schema drift check → per-entity validation → PII SHA-256 hash → DLQ isolation → DELETE + INSERT by execution_date → unified upsert | ~4s |
 | 3 | dbt Run | `.venv-dbt` | Staging (views) → Intermediate (view) → Marts (tables, full-refresh) | ~20s |
 | 4 | dbt Test | `.venv-dbt` | 48 data quality tests executed; circuit breaker on failure | ~6s |
 | 5 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | ~1.5s |
@@ -104,11 +104,11 @@ make pipeline
                             ┌────────────┴────────────┐
                             │                         │
                      ┌──────▼──────┐          ┌───────▼──────────┐
-                     │  IDEMPOTENT  │          │  DEAD LETTER     │
-                     │  LOAD        │          │  QUEUE (DLQ)     │
-                     │  (TRUNCATE   │          │  data/rejected/  │
-                     │   + INSERT)  │          │                  │
-                     │  PII HASH    │          │  Bad rows with   │
+                      │  IDEMPOTENT  │          │  DEAD LETTER     │
+                      │  LOAD        │          │  QUEUE (DLQ)     │
+                      │  (DELETE BY  │          │  data/rejected/  │
+                      │  exec_date)  │          │                  │
+                      │  PII HASH    │          │  Bad rows with   │
                      │  Validators  │          │  rejection_reason│
                      └──────┬──────┘          └───────────────────┘
                             │
@@ -188,11 +188,11 @@ Every source file is checked against `SCHEMA_BLUEPRINT` before any data touches 
 
 | Source Type | Strategy | Mechanism |
 |-------------|----------|-----------|
-| CSV (customers, products, orders) | **Clean Slate** | `TRUNCATE TABLE ... RESTART IDENTITY CASCADE` → `to_sql(if_exists="append")` |
-| JSON (pos_store_sales) | **Replace** | `to_sql(if_exists="replace")` |
+| CSV (customers, products, orders) | **Delete + Insert** | `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` column → `to_sql(if_exists="append")` |
+| JSON (pos_store_sales) | **Delete + Insert** | `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` column → `to_sql(if_exists="append")` |
 | Unified transactions | **Upsert MERGE** | `INSERT ... ON CONFLICT (transaction_id, source_system) DO UPDATE SET ...` |
 
-This guarantees that running the pipeline 10 times on the same data batch produces exactly the same warehouse state with zero duplicate rows.
+This guarantees that running the pipeline N times on the same calendar day produces exactly the same warehouse state with zero duplicate rows across all tables.
 
 ### Alerting Engine
 
@@ -316,7 +316,7 @@ This project teaches, in progression order:
 4. **Orchestration** — circuit breaker pattern, virtual environment switching, streaming subprocess output
 5. **Observability** — Discord/Slack webhooks, colour-coded embeds, rich failure metadata
 6. **Schema Governance** — drift detection, blueprint enforcement, graduated severity, file quarantine
-7. **Warehouse Idempotency** — TRUNCATE + INSERT, upsert MERGE, deterministic re-runs
+7. **Warehouse Idempotency** — DELETE + INSERT by execution_date, upsert MERGE, deterministic re-runs
 8. **CI/CD** — GitHub Actions, service containers, linting, format checking, SQL compilation
 9. **Containerisation** — Docker Compose, multi-stage builds, dual-venv runtime environment
 10. **Visualisation** — Streamlit dashboards, Plotly charts, NetworkX lineage graphs

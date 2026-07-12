@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
 DATA_REJECTED_SCHEMAS = PROJECT_ROOT / "data" / "rejected_schemas"
+DBT_VENV_DIR = PROJECT_ROOT / ".venv-dbt"
 ENV_FILE = PROJECT_ROOT / ".env"
 
 REQUIRED_CSVS: List[str] = ["customers.csv", "products.csv", "orders.csv"]
@@ -154,6 +155,32 @@ def check_raw_csvs() -> Tuple[str, str]:
         "FAIL",
         f"Missing CSV files in data/raw/: {files}. "
         f"Run 'python scripts/generate_fake_data.py'",
+    )
+
+
+def check_dbt_venv() -> Tuple[str, str]:
+    """Check whether the isolated dbt virtual environment exists.
+
+    Returns:
+        (status, message).
+    """
+    marker = (
+        DBT_VENV_DIR / "Scripts" / "dbt.exe"
+        if sys.platform == "win32"
+        else DBT_VENV_DIR / "bin" / "dbt"
+    )
+    if marker.exists():
+        return "OK", "dbt virtual environment (.venv-dbt) is ready"
+    if DBT_VENV_DIR.exists():
+        return (
+            "WARNING",
+            "dbt venv exists but dbt executable not found — "
+            "run 'make setup-dbt'",
+        )
+    return (
+        "WARNING",
+        "dbt virtual environment (.venv-dbt) not found — "
+        "run 'make setup-dbt'",
     )
 
 
@@ -290,6 +317,9 @@ def _print_fix_hints(failed: List[Tuple[str, str]]) -> None:
         "Raw CSV Files": (
             "Run: .venv\\Scripts\\python scripts\\generate_fake_data.py"
         ),
+        "dbt Environment": (
+            "Create the isolated dbt environment: 'make setup-dbt'."
+        ),
         "Schema Drift": (
             "Review files in data/rejected_schemas/. A source file has a "
             "different schema than expected by the blueprint in "
@@ -333,11 +363,13 @@ def main() -> None:
         )
 
     schema_status = check_schema_drift()
+    dbt_venv_status = check_dbt_venv()
 
     checks: List[Tuple[str, Tuple[str, str]]] = [
         ("Docker", docker_status),
         ("PostgreSQL", pg_status),
         (".env File", env_status),
+        ("dbt Environment", dbt_venv_status),
         ("Raw CSV Files", csv_status),
         ("Database Row Counts", row_status),
         ("Schema Drift", schema_status),

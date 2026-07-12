@@ -12,9 +12,10 @@ Verifies that:
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -23,8 +24,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.exports.excel_exporter import (  # noqa: E402
     SHEET_NAMES,
+    ANALYTICS_QUERIES,
     _format_currency_columns,
     build_workbook,
+    fetch_data,
     get_engine,
     save_workbook,
 )
@@ -240,6 +243,46 @@ class TestGetEngine:
             assert "pgdb" in url
 
 
+class TestFetchData:
+    """Tests for the fetch_data function."""
+
+    @patch("src.exports.excel_exporter.pd.read_sql")
+    def test_returns_dataframes_for_each_query(
+        self, mock_read_sql: MagicMock
+    ) -> None:
+        mock_engine = MagicMock()
+        mock_read_sql.return_value = pd.DataFrame({"col": [1]})
+
+        data = fetch_data(mock_engine)
+        assert len(data) == len(ANALYTICS_QUERIES)
+        for sheet_name in ANALYTICS_QUERIES:
+            assert sheet_name in data
+
+    @patch("src.exports.excel_exporter.pd.read_sql", side_effect=Exception("DB error"))
+    def test_query_failure_returns_empty_df(
+        self, mock_read_sql: MagicMock
+    ) -> None:
+        mock_engine = MagicMock()
+        data = fetch_data(mock_engine)
+        for sheet_name, df in data.items():
+            assert df.empty
+
+
+class TestSaveWorkbookFull:
+    """Additional save_workbook tests."""
+
+    def test_creates_output_dir_if_missing(self) -> None:
+        """Should create OUTPUT_DIR if it doesn't exist."""
+        data = {"Top Customers": pd.DataFrame({"a": [1]})}
+        wb = build_workbook(data)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "outputs"
+            with patch("src.exports.excel_exporter.OUTPUT_DIR", output_dir):
+                filepath = save_workbook(wb)
+                assert filepath.exists()
+                assert output_dir.exists()
+
+
 class TestCurrencyFormatting:
     """Tests for the _format_currency_columns function."""
 
@@ -253,3 +296,40 @@ class TestCurrencyFormatting:
         cell = ws.cell(row=2, column=1)
         assert cell.number_format is not None
         assert "0.00" in cell.number_format
+
+    def test_price_column_formatted(self) -> None:
+        """Columns with 'price' in name should get currency format."""
+        df = pd.DataFrame({"unit_price": [25.99], "category": ["A"]})
+        data = dict.fromkeys(SHEET_NAMES, pd.DataFrame())
+        data["Top Customers"] = df
+        wb = build_workbook(data)
+        ws = wb["Top Customers"]
+        _format_currency_columns(ws, df)
+        cell = ws.cell(row=2, column=1)
+        assert cell.number_format is not None
+        assert "0.00" in cell.number_format
+
+    def test_amount_column_formatted(self) -> None:
+        """Columns with 'amount' in name should get currency format."""
+        df = pd.DataFrame({"total_amount": [500.00], "discount": [10]})
+        data = dict.fromkeys(SHEET_NAMES, pd.DataFrame())
+        data["Top Customers"] = df
+        wb = build_workbook(data)
+        ws = wb["Top Customers"]
+        _format_currency_columns(ws, df)
+        cell = ws.cell(row=2, column=1)
+        assert cell.number_format is not None
+
+    def test_non_currency_column_not_formatted(self) -> None:
+        """Columns without currency keywords should not be formatted."""
+        df = pd.DataFrame({"quantity": [5], "category": ["A"]})
+        data = dict.fromkeys(SHEET_NAMES, pd.DataFrame())
+        data["Top Customers"] = df
+        wb = build_workbook(data)
+        ws = wb["Top Customers"]
+        _format_currency_columns(ws, df)
+        for col_idx in range(1, 3):
+            for row_idx in range(2, 3):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                format_str = cell.number_format
+                assert format_str is None or "#,##0.00" not in format_str
