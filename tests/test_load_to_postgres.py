@@ -24,6 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.load_to_postgres import (  # noqa: E402
     SOURCE_MAP,
+    PARQUET_COMPRESSION,
     ensure_raw_schema,
     get_engine,
     delete_by_execution_date,
@@ -35,7 +36,10 @@ from scripts.load_to_postgres import (  # noqa: E402
     _anonymize_pii,
     _validate_and_split,
     _write_dlq,
+    _write_lakehouse_parquet,
+    _duckdb_harmonize,
     _move_to_rejected_schemas,
+    _UNIFIED_DDL,
 )
 
 
@@ -405,3 +409,126 @@ class TestWriteDlq:
                 assert len(csv_files) == 1
                 content = csv_files[0].read_text()
                 assert "missing customer_id" in content
+
+
+class TestWriteLakehouseParquet:
+    """Tests for the _write_lakehouse_parquet function."""
+
+    def test_writes_parquet_with_snappy_compression(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lakehouse = Path(tmpdir) / "lakehouse"
+            with patch(
+                "scripts.load_to_postgres.LAKEHOUSE_DIR",
+                str(lakehouse),
+            ):
+                df = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
+                out_path = _write_lakehouse_parquet(df, "test_entity")
+                assert out_path
+                parquet_file = Path(out_path)
+                assert parquet_file.exists()
+                assert parquet_file.suffix == ".parquet"
+                # Verify we can read it back.
+                result = pd.read_parquet(str(parquet_file))
+                assert len(result) == 2
+                assert list(result.columns) == ["a", "b"]
+
+    def test_empty_df_returns_empty_string(self) -> None:
+        df = pd.DataFrame()
+        result = _write_lakehouse_parquet(df, "empty_entity")
+        assert result == ""
+
+    def test_uses_configured_compression(self) -> None:
+        assert PARQUET_COMPRESSION == "snappy"
+
+
+class TestDuckdbHarmonize:
+    """Tests for the _duckdb_harmonize function."""
+
+    def test_no_parquet_files_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "scripts.load_to_postgres.LAKEHOUSE_DIR",
+                str(Path(tmpdir) / "lakehouse"),
+            ):
+                mock_engine = MagicMock()
+                count = _duckdb_harmonize(mock_engine, "2026-07-13")
+                assert count == 0
+
+    def test_harmonizes_orders_and_pos_parquet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lakehouse = Path(tmpdir) / "lakehouse"
+            lakehouse.mkdir()
+
+            # Write a minimal orders.parquet
+            orders_df = pd.DataFrame({
+                "order_id": ["o1", "o2"],
+                "product_id": ["p1", "p2"],
+                "quantity": [2, 1],
+                "order_date": ["2026-01-01", "2026-01-02"],
+                "customer_id": ["c1", "c2"],
+                "status": ["completed", "pending"],
+                "discount_pct": [0, 10],
+                "shipping_days": [3, 5],
+            })
+            orders_df.to_parquet(str(lakehouse / "orders.parquet"), index=False)
+
+            # Write a minimal pos_store_sales.parquet
+            pos_df = pd.DataFrame({
+                "sale_id": ["s1"],
+                "store_id": ["STORE_001"],
+                "product_id": ["p3"],
+                "quantity": [5],
+                "unit_price_cents": [1999],
+                "total_amount": [9995],
+                "transaction_timestamp": ["2026-01-03T10:00:00"],
+                "payment_method": ["credit_card"],
+            })
+            pos_df.to_parquet(str(lakehouse / "pos_store_sales.parquet"), index=False)
+
+            mock_conn = MagicMock()
+            mock_engine = MagicMock()
+            mock_engine.connect.return_value.__enter__.return_value = mock_conn
+            # Mock the information_schema check (column exists) and DELETE.
+            mock_conn.execute.return_value.scalar.return_value = True
+            # Mock the DDL execution
+            mock_conn.exec_driver_sql.return_value = None
+
+            with patch(
+                "scripts.load_to_postgres.LAKEHOUSE_DIR",
+                str(lakehouse),
+            ):
+                count = _duckdb_harmonize(mock_engine, "2026-07-13")
+                # Should have 2 orders + 1 POS = 3 unified rows
+                assert count == 3
+
+    def test_only_orders_parquet_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lakehouse = Path(tmpdir) / "lakehouse"
+            lakehouse.mkdir()
+            orders_df = pd.DataFrame({
+                "order_id": ["o1"],
+                "product_id": ["p1"],
+                "quantity": [1],
+                "order_date": ["2026-01-01"],
+                "customer_id": ["c1"],
+                "status": ["completed"],
+                "discount_pct": [0],
+                "shipping_days": [2],
+            })
+            orders_df.to_parquet(str(lakehouse / "orders.parquet"), index=False)
+
+            mock_conn = MagicMock()
+            mock_engine = MagicMock()
+            mock_engine.connect.return_value.__enter__.return_value = mock_conn
+            mock_conn.execute.return_value.scalar.return_value = True
+
+            with patch(
+                "scripts.load_to_postgres.LAKEHOUSE_DIR",
+                str(lakehouse),
+            ):
+                count = _duckdb_harmonize(mock_engine, "2026-07-13")
+                assert count == 1
+
+    def test_unified_ddl_includes_execution_date(self) -> None:
+        """Verify the DDL template includes _execution_date."""
+        assert "_execution_date" in _UNIFIED_DDL

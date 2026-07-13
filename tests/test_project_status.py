@@ -258,10 +258,12 @@ class TestMain:
     @patch("scripts.project_status.check_dbt_venv")
     @patch("scripts.project_status.check_raw_csvs")
     @patch("scripts.project_status.check_database_rows")
+    @patch("scripts.project_status.check_lakehouse")
     @patch("scripts.project_status.check_schema_drift")
     def test_healthy_path(
         self,
         mock_schema: MagicMock,
+        mock_lakehouse: MagicMock,
         mock_rows: MagicMock,
         mock_csvs: MagicMock,
         mock_dbt: MagicMock,
@@ -275,6 +277,7 @@ class TestMain:
         mock_dbt.return_value = ("OK", "dbt venv ready")
         mock_csvs.return_value = ("OK", "CSVs present")
         mock_rows.return_value = ("OK", "All tables have data")
+        mock_lakehouse.return_value = ("OK", "Lakehouse ready")
         mock_schema.return_value = ("OK", "No drift detected")
 
         with patch("scripts.project_status.sys.exit") as mock_exit:
@@ -286,10 +289,12 @@ class TestMain:
     @patch("scripts.project_status.check_env_file")
     @patch("scripts.project_status.check_dbt_venv")
     @patch("scripts.project_status.check_raw_csvs")
+    @patch("scripts.project_status.check_lakehouse")
     @patch("scripts.project_status.check_schema_drift")
     def test_docker_failure_skips_pg(
         self,
         mock_schema: MagicMock,
+        mock_lakehouse: MagicMock,
         mock_csvs: MagicMock,
         mock_dbt: MagicMock,
         mock_env: MagicMock,
@@ -300,6 +305,7 @@ class TestMain:
         mock_env.return_value = ("OK", ".env loaded")
         mock_dbt.return_value = ("OK", "dbt venv ready")
         mock_csvs.return_value = ("OK", "CSVs present")
+        mock_lakehouse.return_value = ("OK", "Lakehouse ready")
         mock_schema.return_value = ("OK", "No drift detected")
 
         with patch("scripts.project_status.sys.exit") as mock_exit:
@@ -313,10 +319,12 @@ class TestMain:
     @patch("scripts.project_status.check_dbt_venv")
     @patch("scripts.project_status.check_raw_csvs")
     @patch("scripts.project_status.check_database_rows")
+    @patch("scripts.project_status.check_lakehouse")
     @patch("scripts.project_status.check_schema_drift")
     def test_degraded_path(
         self,
         mock_schema: MagicMock,
+        mock_lakehouse: MagicMock,
         mock_rows: MagicMock,
         mock_csvs: MagicMock,
         mock_dbt: MagicMock,
@@ -330,6 +338,7 @@ class TestMain:
         mock_dbt.return_value = ("OK", "dbt venv ready")
         mock_csvs.return_value = ("WARNING", "Some CSVs missing")
         mock_rows.return_value = ("OK", "All tables have data")
+        mock_lakehouse.return_value = ("OK", "Lakehouse ready")
         mock_schema.return_value = ("OK", "No drift detected")
 
         with patch("scripts.project_status.sys.exit") as mock_exit:

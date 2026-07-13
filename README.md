@@ -17,7 +17,7 @@
 | 1 | **Data Schema Evolution & Drift Detection** | `SCHEMA_BLUEPRINT` dictionary in `load_to_postgres.py` enforces per-entity column schemas. Missing columns / type mismatches → file quarantined to `data/rejected_schemas/`, pipeline halts with exit code 2, red alert dispatched. Extra unknown columns → amber warning, pipeline continues. | Prevents silent corruption when upstream source schemas evolve without notice. Graduated severity (Critical / Warning) mirrors real-world SLAs. |
 | 2 | **Warehouse Idempotency & Fault Tolerance** | `DELETE FROM target WHERE _execution_date = :today` before every batch insert. Each row tagged with the run's UTC date. Unified transactions use `INSERT ... ON CONFLICT DO UPDATE`. Re-running the pipeline N times on the same calendar day produces identical warehouse state with zero duplicates. | Guarantees deterministic re-runs — essential for backfills, retries, and incremental refresh cycles without data corruption. |
 | 3 | **Dual Virtual Environment Strategy** | `.venv/` (pandas, streamlit, airflow) and `.venv-dbt/` (dbt-core 1.7 + dbt-postgres) resolve the `mashumaro<4` vs `mashumaro>=4` dependency conflict between dbt-core and Airflow/Great Expectations. Orchestrator resolves the correct executable per step via `_py_exe()` / `_dbt_exe()`. | Mirrors production runtime isolation patterns — no single `pip install` can satisfy conflicting transitive dependencies. Common in teams running dbt alongside orchestration tools. |
-| 4 | **CI/CD & DevOps Automation** | GitHub Actions workflow (`.github/workflows/ci_cd.yml`) runs `flake8` linting, `black --check` formatting, full 77+ test `pytest` suite, and `dbt debug` + `dbt parse` SQL compilation against a live PostgreSQL 15 service container on every push/PR. | Catches Python regressions, SQL compilation errors, and broken `ref()` chains before merge. Service container pattern eliminates the need for external test databases. |
+| 4 | **CI/CD & DevOps Automation** | GitHub Actions workflow (`.github/workflows/ci_cd.yml`) runs `flake8` linting, `black --check` formatting, full 155+ test `pytest` suite, and `dbt debug` + `dbt parse` SQL compilation against a live PostgreSQL 15 service container on every push/PR. | Catches Python regressions, SQL compilation errors, and broken `ref()` chains before merge. Service container pattern eliminates the need for external test databases. |
 | 5 | **Data Quality Circuit Breaker & Graph Lineage** | 48 automated dbt tests across all models. On failure, orchestrator reads `run_results.json`, dispatches per-test metadata (unique ID, status, execution time, database message) to Discord/Slack. After successful run, `generate_lineage.py` builds a `networkx.DiGraph` from `manifest.json` and renders a colour-coded 200 DPI PNG lineage map. | Goes beyond pass/fail — the alert tells the team *exactly* which SLA was breached. The commitable lineage artifact documents data flow without external tooling. |
 
 ---
@@ -28,13 +28,16 @@
 |-------|-------|---------|
 | **Language** | Python 3.12 | Core pipeline, ingestion, automation |
 | **Warehouse** | PostgreSQL 15 (Docker) | Relational data warehouse |
+| **Lakehouse** | DuckDB 1.5, Apache Parquet, PyArrow | Columnar serialisation, OLAP harmonisation via embedded DuckDB |
 | **Transformation** | dbt-core 1.7, dbt-postgres 1.7 | SQL model compilation, incremental materialisation, data quality tests |
 | **Orchestration** | Python CLI orchestrator, Airflow DAG alternative | Sequential DAG execution, circuit breaker, environment switching |
 | **Ingestion** | pandas, SQLAlchemy, Faker | CSV + JSON hybrid ingestion, PII anonymisation, schema drift detection |
 | **Dashboard** | Streamlit, Plotly | Live KPI monitoring with 5-min cached refresh |
 | **CI/CD** | GitHub Actions (flake8, black, pytest, dbt parse) | Automated quality gates on every commit |
+| **Columnar Storage** | Apache Parquet (Snappy), PyArrow | Compressed columnar serialisation — the "L" in the Lakehouse |
+| **Columnar Storage** | Apache Parquet (Snappy), PyArrow | Compressed columnar serialisation — the "L" in the Lakehouse |
 | **Containerisation** | Docker Compose (PostgreSQL + app + pgAdmin) | Reproducible local development and deployment |
-| **Testing** | pytest 7, pytest-cov | 77+ unit and integration tests |
+| **Testing** | pytest 7, pytest-cov | 155+ unit and integration tests |
 | **Observability** | Discord / Slack webhooks, colour-coded embeds | Real-time pipeline alerting with rich failure metadata |
 | **Data Profiling** | pandas, self-contained HTML report | Per-column statistical analysis with interactive visualisation |
 | **Lineage** | networkx, matplotlib | Automated DAG rendering at 200 DPI |
@@ -66,7 +69,7 @@ make pipeline
 | Step | Component | Environment | What Happens | Duration (small) |
 |------|-----------|-------------|-------------|-------------------|
 | 1 | Generate Data | `.venv` | Faker creates 4 source files (CSV + JSON) in `data/raw/` | ~1.5s |
-| 2 | Load to PostgreSQL | `.venv` | Schema drift check → per-entity validation → PII SHA-256 hash → DLQ isolation → DELETE + INSERT by execution_date → unified upsert | ~4s |
+| 2 | Load to PostgreSQL | `.venv` | Schema drift check → per-entity validation → PII SHA-256 hash → DLQ isolation → Parquet serialisation (data/lakehouse/) → DELETE + INSERT by execution_date → DuckDB harmonise Parquet → unified insert | ~4s |
 | 3 | dbt Run | `.venv-dbt` | Staging (views) → Intermediate (view) → Marts (tables, full-refresh) | ~20s |
 | 4 | dbt Test | `.venv-dbt` | 48 data quality tests executed; circuit breaker on failure | ~6s |
 | 5 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | ~1.5s |
@@ -104,22 +107,37 @@ make pipeline
                             ┌────────────┴────────────┐
                             │                         │
                      ┌──────▼──────┐          ┌───────▼──────────┐
-                      │  IDEMPOTENT  │          │  DEAD LETTER     │
-                      │  LOAD        │          │  QUEUE (DLQ)     │
-                      │  (DELETE BY  │          │  data/rejected/  │
-                      │  exec_date)  │          │                  │
-                      │  PII HASH    │          │  Bad rows with   │
-                     │  Validators  │          │  rejection_reason│
+                     │  VALIDATE    │          │  DEAD LETTER     │
+                     │  + PII HASH  │          │  QUEUE (DLQ)     │
+                     │  + DLQ       │          │  data/rejected/  │
+                     │  isolation   │          │                  │
+                     │              │          │  Bad rows with   │
+                     │              │          │  rejection_reason│
                      └──────┬──────┘          └───────────────────┘
                             │
+                     ┌──────▼───────────────────────────────────────┐
+                     │  L  LOCAL DATA LAKEHOUSE                      │
+                     │  A  data/lakehouse/*.parquet (Snappy)         │
+                     │  K  ┌─────────────────────────────────────┐   │
+                     │  E  │  _write_lakehouse_parquet():        │   │
+                     │  H  │  Clean chunks → PyArrow + Snappy    │   │
+                     │  O  │  → customers.parquet, orders.parquet│   │
+                     │  U  │  products.parquet, pos_store_sales. │   │
+                     │  S  │  parquet (JSON path)                │   │
+                     │  E  └─────────────────────────────────────┘   │
+                     └──────────────────────┬────────────────────────┘
+                                            │
+                     ┌──────────────────────▼────────────────────────┐
+                     │  DUCKDB OLAP HARMONISATION                     │
+                     │  _duckdb_harmonize(): reads *.parquet via      │
+                     │  DuckDB, UNION ALL orders + pos_store_sales,   │
+                     │  writes result → raw.unified_transactions      │
+                     └──────────────────────┬────────────────────────┘
+                                            │
                      ┌──────▼───────────────────────────────────────┐
                      │        PostgreSQL 15 WAREHOUSE                │
                      │  raw.customers  raw.products  raw.orders      │
                      │  raw.pos_store_sales  raw.unified_transactions│
-                     │  ┌─────────────────────────────────────────┐  │
-                     │  │ IDEMPOTENT: INSERT ... ON CONFLICT      │  │
-                     │  │ DO UPDATE (unified_transactions)        │  │
-                     │  └─────────────────────────────────────────┘  │
                      └──────────────────────┬────────────────────────┘
                                             │
                      ┌──────────────────────▼────────────────────────┐
@@ -184,13 +202,20 @@ Every source file is checked against `SCHEMA_BLUEPRINT` before any data touches 
        └──────────────────┘   └──────────────────────┘
 ```
 
+### Local Data Lakehouse
+
+After validation and before PostgreSQL insert, clean data is serialised as **Snappy-compressed Apache Parquet** files in `data/lakehouse/`. This serves as:
+- **Columnar intermediate storage** — enables schema-on-read without schema-on-write
+- **Source for DuckDB OLAP** — `_duckdb_harmonize()` reads `.parquet` via embedded DuckDB, unions orders + POS, and inserts into `raw.unified_transactions`
+- **Reproducible audit trail** — every pipeline run leaves a self-describing Parquet artifact
+
 ### Idempotent Loading Strategy
 
 | Source Type | Strategy | Mechanism |
 |-------------|----------|-----------|
-| CSV (customers, products, orders) | **Delete + Insert** | `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` column → `to_sql(if_exists="append")` |
-| JSON (pos_store_sales) | **Delete + Insert** | `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` column → `to_sql(if_exists="append")` |
-| Unified transactions | **Upsert MERGE** | `INSERT ... ON CONFLICT (transaction_id, source_system) DO UPDATE SET ...` |
+| CSV (customers, products, orders) | **Parquet + Delete + Insert** | Clean chunks accumulate → `_write_lakehouse_parquet()` → `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` → `to_sql(if_exists="append")` |
+| JSON (pos_store_sales) | **Parquet + Delete + Insert** | `_write_lakehouse_parquet()` → `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` → `to_sql(if_exists="append")` |
+| Unified transactions | **DuckDB harmonise + Insert** | `_duckdb_harmonize()` reads `orders.parquet` + `pos_store_sales.parquet` via embedded DuckDB `UNION ALL`, maps columns, writes to `raw.unified_transactions` with `_execution_date` |
 
 This guarantees that running the pipeline N times on the same calendar day produces exactly the same warehouse state with zero duplicate rows across all tables.
 
@@ -253,7 +278,7 @@ def _dbt_exe():  # → .venv-dbt/Scripts/dbt.exe (Win) or $DBT_EXECUTABLE (Linux
 ## Testing
 
 ```bash
-# Full suite (77+ tests)
+# Full suite (155+ tests)
 .venv\Scripts\pytest tests/ -v --tb=short
 
 # With coverage
@@ -267,8 +292,8 @@ def _dbt_exe():  # → .venv-dbt/Scripts/dbt.exe (Win) or $DBT_EXECUTABLE (Linux
 |-----------|----------|-----------|
 | `test_generate_data.py` | Row counts, columns, valid ranges | Faker output correctness |
 | `test_transformations.py` | Cents→dollars, discount calc, status normalisation | Business logic |
-| `test_load_to_postgres.py` | Engine creation, schema, truncation | DB connectivity |
-| `test_project_status.py` | Docker, PostgreSQL, env, CSVs, status aggregation | Pipeline health logic |
+| `test_load_to_postgres.py` | Engine creation, schema, truncation, Lakehouse, DuckDB, Parquet | DB connectivity & lakehouse |
+| `test_project_status.py` | Docker, PostgreSQL, env, Lakehouse, CSVs, status aggregation | Pipeline health logic (8 dims) |
 | `test_excel_export.py` | Workbook, sheets, headers, styling, currency format | Export formatting |
 | `test_generate_data_profiles.py` | CLI defaults, overrides, parsing | Argument resolution |
 
@@ -280,7 +305,7 @@ On every push/PR to `main`/`master`, GitHub Actions executes two parallel jobs a
 
 | Job | Steps | Purpose |
 |-----|-------|---------|
-| **Core Python** | `flake8` lint → `black --check` → `pytest` (77+ tests) | Code quality + regression detection |
+| **Core Python** | `flake8` lint → `black --check` → `pytest` (155+ tests) | Code quality + regression detection |
 | **dbt Validation** | `pip install dbt-core dbt-postgres` → `CREATE SCHEMA raw` → `dbt debug` → `dbt parse` | SQL compilation check — validates all models, refs, sources, macros |
 
 ---
@@ -302,7 +327,7 @@ On every push/PR to `main`/`master`, GitHub Actions executes two parallel jobs a
 .venv\Scripts\python scripts/project_status.py
 ```
 
-Validates 6 dimensions: Docker Desktop → PostgreSQL container → `.env` file → raw CSV files → database row counts → schema drift quarantine. Exits with code 0 (healthy), 1 (degraded), or 2 (unhealthy) with actionable fix hints.
+Validates 8 dimensions: Docker Desktop → PostgreSQL container → `.env` file → dbt environment → Lakehouse Parquet files → raw CSV files → database row counts → schema drift quarantine. Exits with code 0 (healthy), 1 (degraded), or 2 (unhealthy) with actionable fix hints.
 
 ---
 
@@ -335,11 +360,11 @@ retailflow-pipeline/
 ├── scripts/                # Core pipeline scripts
 │   ├── orchestrate.py      # 8-step orchestrator + circuit breaker + alerting
 │   ├── generate_fake_data.py   # Faker synthetic data (CSV + JSON)
-│   ├── load_to_postgres.py     # Hybrid ingestion + schema drift detector + PII hash + unified upsert
+│   ├── load_to_postgres.py     # Hybrid ingestion + schema drift + PII hash + Parquet + DuckDB
 │   ├── generate_lineage.py     # NetworkX lineage graph renderer
 │   ├── generate_profiling.py   # Pandas data profiling → HTML report
 │   ├── alerts.py               # Discord/Slack webhook dispatcher
-│   └── project_status.py       # End-to-end pipeline health check
+│   └── project_status.py       # End-to-end pipeline health check (8 dimensions)
 │
 ├── src/
 │   ├── dashboard/app.py        # Streamlit KPI dashboard
@@ -357,9 +382,10 @@ retailflow-pipeline/
 ├── Dockerfile               # Multi-stage, dual-venv image
 ├── Makefile                 # Dev workflow commands
 ├── sql/                     # Schema DDL + analytics queries
-├── tests/                   # 77+ pytest tests
+├── tests/                   # 155+ pytest tests
 ├── data/
 │   ├── raw/                 # Generated source files (gitignored)
+│   ├── lakehouse/           # Parquet columnar lake (gitignored)
 │   ├── rejected/            # Dead Letter Queue (gitignored)
 │   └── rejected_schemas/    # Schema drift quarantine (gitignored)
 ├── docs/

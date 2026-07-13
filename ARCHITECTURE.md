@@ -42,7 +42,7 @@ retailflow-pipeline/
 │   ├── generate_lineage.py       # NetworkX lineage graph renderer (200 DPI PNG)
 │   ├── generate_profiling.py     # Pandas data profiling → interactive HTML report
 │   ├── alerts.py                 # Discord/Slack webhook dispatcher with embed fallback
-│   └── project_status.py         # E2E health check (Docker → PG → env → CSVs → drift quarantine)
+│   └── project_status.py         # E2E health check (8 dims: Docker → PG → env → Lakehouse → CSVs → drift quarantine)
 │
 ├── src/                          # Python application package
 │   ├── __init__.py
@@ -63,9 +63,10 @@ retailflow-pipeline/
 │   ├── schema/                   # DDL (CREATE SCHEMA / TABLE)
 │   └── analytics/                # Business analysis queries
 │
-├── tests/                        # 77+ pytest tests (6 test modules)
+├── tests/                        # 155+ pytest tests (6 test modules)
 ├── data/
 │   ├── raw/                      # Generated CSVs + JSON (gitignored)
+│   ├── lakehouse/                # Snappy-compressed Parquet columnar lake (gitignored)
 │   ├── rejected/                 # Dead Letter Queue — rejected rows with rejection_reason (gitignored)
 │   └── rejected_schemas/         # Schema drift quarantine (gitignored)
 ├── outputs/                      # Excel exports (gitignored)
@@ -76,7 +77,7 @@ retailflow-pipeline/
 ├── .github/workflows/ci_cd.yml   # CI/CD: flake8 → black → pytest → dbt debug → dbt parse
 ├── docker-compose.yml            # PostgreSQL 15 + app + pgAdmin (3 services)
 ├── Dockerfile                    # Multi-stage, dual-venv image
-├── Makefile                      # Dev workflow commands (18 targets)
+├── Makefile                      # Dev workflow commands (19 targets incl. lakehouse)
 ├── ARCHITECTURE.md               # This file
 └── README.md                     # Project overview
 ```
@@ -86,7 +87,7 @@ retailflow-pipeline/
 ## 2. ASCII Data Flow Diagram
 
 ```
-  RETAILFLOW PIPELINE — END-TO-END DATA FLOW v1.2.0
+  RETAILFLOW PIPELINE — END-TO-END DATA FLOW v1.4.0
   =====================================================
   LEGEND: [D] = Drift Detector  [I] = Idempotent Load  [Q] = Quarantine
 
@@ -448,9 +449,33 @@ Bad rows are isolated to `data/rejected/` with a `rejection_reason` column. DLQ 
 - Null values preserved as-is
 - Raw CSV files on disk remain unmodified
 
-#### Schema Harmonisation & Unified Upsert
+#### Local Data Lakehouse — Parquet Serialisation
 
-After all raw source tables are loaded, `_harmonize_and_upsert_unified()` creates (if missing) and populates `raw.unified_transactions`:
+After validation/PII hashing and before PostgreSQL insert, `_write_lakehouse_parquet()` serialises clean chunks as **Snappy-compressed Apache Parquet** files in `data/lakehouse/`. Each entity gets its own file: `customers.parquet`, `products.parquet`, `orders.parquet`, `pos_store_sales.parquet`.
+
+This compressed columnar format serves as:
+- **Columnar intermediate storage** — schema-on-read without PostgreSQL schema lock-in
+- **DuckDB OLAP source** — used by `_duckdb_harmonize()` for the unified view
+- **Audit artifact** — every pipeline run leaves a self-describing Parquet trail
+
+#### DuckDB OLAP Harmonisation (replaces PostgreSQL UPSERT)
+
+After raw source tables and Parquet are both written, `_duckdb_harmonize()` replaces the old `_harmonize_and_upsert_unified()`:
+
+1. Uses embedded DuckDB (`import duckdb`) — no separate server, no Docker
+2. Reads `data/lakehouse/orders.parquet` and `data/lakehouse/pos_store_sales.parquet` directly
+3. Builds a `UNION ALL` SQL dynamically with column mapping:
+   - `order_id` / `sale_id` → `transaction_id`
+   - `'online'` / `'pos'` → `source_system`
+   - `order_date` / `transaction_timestamp::date` → `transaction_date`
+   - Adds `_execution_date` for idempotent deletion
+4. Calls `delete_by_execution_date()` then `to_sql(if_exists="append")` — removes old upsert SQL
+
+This design gives zero-copy columnar reads from Parquet, eliminates PostgreSQL-side upsert complexity, and adds zero runtime overhead.
+
+#### Schema Harmonisation Map
+
+`_duckdb_harmonize()` maps columns for the unified view:
 
 | Unified Column | Online Source (raw.orders) | POS Source (raw.pos_store_sales) |
 |---|---|---|
@@ -482,9 +507,9 @@ After all raw source tables are loaded, `_harmonize_and_upsert_unified()` create
 
 | Source Type | Strategy | Code Path | Schema |
 |-------------|----------|-----------|--------|
-| **CSV** (customers, products, orders) | **Delete + Insert** — `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` → `pandas.to_sql(if_exists="append")` | `delete_by_execution_date()` + `load_csv_to_table()` via `chunksize=10_000` + `method="multi"` | `raw.*` |
-| **JSON** (pos_store_sales) | **Delete + Insert** — `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` → `pandas.to_sql(if_exists="append")` | `delete_by_execution_date()` + `_load_json_to_table()` | `raw.pos_store_sales` |
-| **Unified** (online + POS) | **Upsert MERGE** — `INSERT ... ON CONFLICT DO UPDATE` | `_harmonize_and_upsert_unified()` | `raw.unified_transactions` |
+| **CSV** (customers, products, orders) | **Parquet + Delete + Insert** — clean chunks → `_write_lakehouse_parquet()` → `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` → `pandas.to_sql(if_exists="append")` via `chunksize=10_000` + `method="multi"` | `delete_by_execution_date()` + `load_csv_to_table()` (with `clean_chunks` accumulator) | `raw.*` |
+| **JSON** (pos_store_sales) | **Parquet + Delete + Insert** — `_write_lakehouse_parquet()` → `DELETE FROM target WHERE _execution_date = :today` → add `_execution_date` → `pandas.to_sql(if_exists="append")` | `delete_by_execution_date()` + `_load_json_to_table()` | `raw.pos_store_sales` |
+| **Unified** (online + POS) | **DuckDB OLAP Insert** — `_duckdb_harmonize()` reads `orders.parquet` + `pos_store_sales.parquet` via embedded DuckDB, builds `UNION ALL` with column mapping, calls `delete_by_execution_date()` then `to_sql(if_exists="append")` | `_duckdb_harmonize()` | `raw.unified_transactions` |
 
 This design guarantees that re-running the pipeline N times on the same data batch produces exactly the same warehouse state with zero duplicate rows across all tables.
 
@@ -496,7 +521,7 @@ raw          (schema)  — 5 tables, managed by load_to_postgres.py
 ├── products               ← DELETE + INSERT by _execution_date (idempotent)
 ├── orders                 ← DELETE + INSERT by _execution_date (idempotent)
 ├── pos_store_sales        ← DELETE + INSERT by _execution_date (idempotent)
-└── unified_transactions   ← UPSERT MERGE (idempotent)
+└── unified_transactions   ← DUCKDB HARMONISE + INSERT by _execution_date
 
 staging      (schema)  — 3 views, created by dbt run --select staging
 ├── stg_customers
@@ -528,6 +553,7 @@ CREATE TABLE IF NOT EXISTS raw.unified_transactions (
     payment_method   TEXT,
     discount_pct     INTEGER,
     shipping_days    INTEGER,
+    _execution_date  DATE,
     ingested_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (transaction_id, source_system)
 );
@@ -611,7 +637,7 @@ The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG w
 
 ```
 [1] Generate Data     .venv        Faker → 4 source files in data/raw/
-[2] Load PostgreSQL   .venv        Drift check → validate → PII hash → load → unified upsert
+[2] Load PostgreSQL   .venv        Drift check → validate → PII hash → Parquet → load → DuckDB harmonise
 [3] dbt Run           .venv-dbt    staging (views) → intermediate (view) → marts (tables, full-refresh)
 [4] dbt Test          .venv-dbt    48 data quality tests; circuit breaker on failure
 [5] Excel Export      .venv        4 analytics sheets → styled .xlsx in outputs/
@@ -894,7 +920,7 @@ Layer 4: Application code   scripts/, src/, dbt/, tests/
                     │       │ flake8  │ │dbt debug│                    │
                     │       │ black   │ │dbt parse│                    │
                     │       │ pytest  │ │         │                    │
-                    │       │ 77 tests│ │ SQL     │                    │
+                    │       │155 tests│ │ SQL     │                    │
                     │       └─────────┘ │ compiles│                    │
                     │                   └─────────┘                    │
                     │                                                  │
@@ -911,7 +937,7 @@ Layer 4: Application code   scripts/, src/, dbt/, tests/
 | 3 | `pip install -r requirements.txt` | Installs all main dependencies |
 | 4 | `flake8` | Code style (ignores E501, W503) |
 | 5 | `black --check` | Formatting consistency |
-| 6 | `pytest` on tests/ | 77+ unit and integration tests |
+| 6 | `pytest` on tests/ | 155+ unit and integration tests |
 
 ### Job 2 — dbt Validation
 
@@ -999,7 +1025,7 @@ make pipeline
 | Step | Component | Environment | What Happens | On Failure |
 |------|-----------|-------------|-------------|------------|
 | 1 | Generate Data | `.venv` | Faker creates 4 source files in `data/raw/` with referential integrity | Exit code 1 → pipeline halts |
-| 2 | Load to PostgreSQL | `.venv` | Schema drift check → delete_by_execution_date → validation guardrails → PII hash → load → DLQ isolation → unified upsert | Exit code 1 (general) or 2 (schema drift); DLQ warning sent |
+| 2 | Load to PostgreSQL | `.venv` | Schema drift check → delete_by_execution_date → validation guardrails → PII hash → Parquet serialisation → load → DuckDB harmonise → DLQ isolation | Exit code 1 (general) or 2 (schema drift); DLQ warning sent |
 | 3 | dbt Run | `.venv-dbt` | 3 sub-steps: staging (views) → intermediate (view) → marts (tables, full-refresh) | Exit code 1 → pipeline halts mid-substep |
 | 4 | dbt Test | `.venv-dbt` | 48 data quality tests; `run_results.json` parsed for failure metadata | Critical alert with per-test details → pipeline halts |
 | 5 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | Exit code 1 → pipeline halts |
@@ -1010,11 +1036,11 @@ make pipeline
 ### Validation
 
 ```bash
-# Health check (6 dimensions)
+# Health check (8 dimensions)
 make status
-# → Checks: Docker → PostgreSQL → .env → CSVs → DB rows → schema drift quarantine
+# → Checks: Docker → PostgreSQL → .env → dbt env → Lakehouse → CSVs → DB rows → schema drift quarantine
 
-# Python test suite (77+ tests)
+# Python test suite (155+ tests)
 make test
 
 # dbt tests (separate, 48 tests)
@@ -1038,4 +1064,4 @@ Once pushed to `main`/`master`, the workflow at `.github/workflows/ci_cd.yml` au
 
 ---
 
-*Architecture document v1.2.0 — Generated for the RetailFlow Pipeline project.*
+*Architecture document v1.4.0 — Generated for the RetailFlow Pipeline project.*

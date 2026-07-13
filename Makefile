@@ -5,7 +5,7 @@
 # Type `make help` to see all available commands.
 # =============================================================================
 
-.PHONY: help setup setup-dbt run stop clean clean-rejected test coverage lint format status export dashboard pipeline docs dbt-run dbt-test sql-analyze generate-data load-data
+.PHONY: help setup setup-dbt run stop clean clean-rejected test coverage lint format status export dashboard pipeline docs dbt-run dbt-test sql-analyze generate-data load-data lakehouse
 
 help:  # Print available commands with descriptions
 	@echo "RetailFlow Pipeline — Available Commands"
@@ -20,9 +20,10 @@ help:  # Print available commands with descriptions
 	@echo "  make dbt-run        Execute all dbt models (staging -> intermediate -> marts)"
 	@echo "  make dbt-test       Run dbt data tests on all models"
 	@echo "  make pipeline       Run full 8-step pipeline end-to-end via orchestrator"
-	@echo "  make test           Run pytest unit tests (77+ tests)"
+	@echo "  make test           Run pytest unit tests (155+ tests)"
 	@echo "  make coverage       Run pytest with coverage report"
-	@echo "  make status         Run end-to-end pipeline health check (7 dimensions)"
+	@echo "  make status         Run end-to-end pipeline health check (8 dimensions)"
+	@echo "  make lakehouse      Verify Lakehouse Parquet files in data/lakehouse/"
 	@echo "  make export         Export analytics to styled Excel workbook"
 	@echo "  make dashboard      Launch the Streamlit analytics dashboard"
 	@echo "  make docs           Launch the dbt docs metadata portal in browser"
@@ -125,7 +126,7 @@ docs:  # Generate dbt docs artifacts and launch the metadata portal in a browser
 	@echo ">> Starting dbt docs server at http://localhost:8080..."
 	@cd dbt && ..\.venv-dbt\Scripts\dbt docs serve
 
-test:  # Run pytest unit tests (77+ tests)
+test:  # Run pytest unit tests (155+ tests)
 	@echo ">> Running unit tests..."
 	@.venv\Scripts\pytest tests\ -v --tb=short
 	@echo ">> Tests complete."
@@ -144,6 +145,11 @@ format:  # Auto-format all Python code with black
 	@echo ">> Formatting Python code with black..."
 	@.venv\Scripts\black scripts\ airflow\ tests\
 	@echo ">> Formatting complete."
+
+lakehouse:  # Verify Lakehouse Parquet files in data/lakehouse/
+	@echo ">> Checking Lakehouse Parquet files..."
+	@if exist "data\lakehouse\*.parquet" (for %%f in (data\lakehouse\*.parquet) do @echo "  [OK]  %%~nxf") else (echo "  [WARN]  No Parquet files found in data/lakehouse/. Run 'make pipeline' first.")
+	@echo ">> Lakehouse check complete."
 
 clean-rejected:  # Remove DLQ files, schema drift quarantine, and outputs
 	@echo ">> Cleaning rejected and quarantine directories..."

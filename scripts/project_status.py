@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_RAW = PROJECT_ROOT / "data" / "raw"
 DATA_REJECTED_SCHEMAS = PROJECT_ROOT / "data" / "rejected_schemas"
+LAKEHOUSE_DIR = PROJECT_ROOT / "data" / "lakehouse"
 DBT_VENV_DIR = PROJECT_ROOT / ".venv-dbt"
 ENV_FILE = PROJECT_ROOT / ".env"
 
@@ -155,6 +156,34 @@ def check_raw_csvs() -> Tuple[str, str]:
         "FAIL",
         f"Missing CSV files in data/raw/: {files}. "
         f"Run 'python scripts/generate_fake_data.py'",
+    )
+
+
+def check_lakehouse() -> Tuple[str, str]:
+    """Check whether the data/lakehouse/ directory has Parquet files.
+
+    Returns:
+        (status, message).
+    """
+    if not LAKEHOUSE_DIR.exists():
+        return (
+            "WARNING",
+            "Lakehouse directory (data/lakehouse/) not found — "
+            "run the pipeline to generate Parquet files.",
+        )
+
+    parquet_files = list(LAKEHOUSE_DIR.glob("*.parquet"))
+    if not parquet_files:
+        return (
+            "WARNING",
+            "Lakehouse directory exists but no .parquet files found — "
+            "run the pipeline to generate them.",
+        )
+
+    names = ", ".join(f.name for f in parquet_files)
+    return (
+        "OK",
+        f"Lakehouse directory present with Parquet file(s): {names}",
     )
 
 
@@ -326,6 +355,9 @@ def _print_fix_hints(failed: List[Tuple[str, str]]) -> None:
             "scripts/load_to_postgres.py. Update SCHEMA_BLUEPRINT or "
             "fix the source file, then move it back to data/raw/."
         ),
+        "Lakehouse": (
+            "Run 'make pipeline' to generate Parquet files in data/lakehouse/."
+        ),
         "Database Row Counts": (
             "Run: .venv\\Scripts\\python scripts\\load_to_postgres.py"
         ),
@@ -364,12 +396,14 @@ def main() -> None:
 
     schema_status = check_schema_drift()
     dbt_venv_status = check_dbt_venv()
+    lakehouse_status = check_lakehouse()
 
     checks: List[Tuple[str, Tuple[str, str]]] = [
         ("Docker", docker_status),
         ("PostgreSQL", pg_status),
         (".env File", env_status),
         ("dbt Environment", dbt_venv_status),
+        ("Lakehouse", lakehouse_status),
         ("Raw CSV Files", csv_status),
         ("Database Row Counts", row_status),
         ("Schema Drift", schema_status),
