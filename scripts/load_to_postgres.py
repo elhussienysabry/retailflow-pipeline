@@ -1,11 +1,20 @@
 """
-RetailFlow Pipeline — Hybrid Ingestion Engine
-===============================================
+RetailFlow Pipeline — Hybrid Ingestion Engine + Local Data Lakehouse
+=====================================================================
 
 Reads CSV (e-commerce) and JSON (POS store) source files from ``data/raw/``,
 validates rows, loads clean data into the PostgreSQL ``raw`` schema, and
-runs schema harmonisation to create a unified ``raw.unified_transactions``
-table with upsert semantics.
+persists clean datasets as compressed Apache Parquet in ``data/lakehouse/``
+for the embedded DuckDB OLAP layer.
+
+Pipeline flow:
+    1. Schema drift detection (blueprint comparison)
+    2. Per-entity validation guardrails
+    3. PII anonymization (SHA-256)
+    4. Idempotent PostgreSQL load (DELETE BY execution_date + INSERT)
+    5. ✅ NEW — Parquet columnar serialisation (Snappy) to data/lakehouse/
+    6. ✅ NEW — DuckDB in-memory harmonisation (reads .parquet, writes unified)
+    7. Dead Letter Queue for rejected rows
 
 Supports multi-source hybrid ingestion:
     - ``customers.csv``   — online customer records
@@ -35,6 +44,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
+import duckdb
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -149,6 +159,12 @@ SCHEMA_BLUEPRINT: Dict[str, Dict[str, Any]] = {
 _REJECTED_SCHEMAS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "data", "rejected_schemas"
 )
+
+# ── Local Data Lakehouse (Parquet) ──────────────────────────────────────
+LAKEHOUSE_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "data", "lakehouse"
+)
+PARQUET_COMPRESSION = "snappy"
 
 
 def _normalize_dtype(dtype_str: str) -> str:
@@ -455,6 +471,48 @@ def _write_dlq(entity_name: str, rejected_df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Local Data Lakehouse — Parquet Columnar Serialization
+# ---------------------------------------------------------------------------
+
+
+def _write_lakehouse_parquet(df: pd.DataFrame, entity_name: str) -> str:
+    """Write a clean DataFrame to ``data/lakehouse/`` as compressed Parquet.
+
+    The file is written with Snappy compression.  If the file already
+    exists from a prior run on the same day it is overwritten, which is
+    safe because the idempotency layer deletes-and-reinserts by
+    execution_date.
+
+    Args:
+        df: Clean DataFrame (already PII-hashed, validated).
+        entity_name: Logical entity name used as the file stem
+            (e.g. ``"customers"``, ``"orders"``, ``"pos_store_sales"``).
+
+    Returns:
+        Absolute path to the written ``.parquet`` file.
+    """
+    if df.empty:
+        logger.warning("Skipping Parquet write for %s — DataFrame is empty.", entity_name)
+        return ""
+
+    os.makedirs(LAKEHOUSE_DIR, exist_ok=True)
+    out_path = os.path.join(LAKEHOUSE_DIR, f"{entity_name}.parquet")
+
+    df.to_parquet(
+        out_path,
+        compression=PARQUET_COMPRESSION,
+        index=False,
+    )
+    logger.info(
+        "Lakehouse Parquet written: %s (%d rows, %s)",
+        out_path,
+        len(df),
+        PARQUET_COMPRESSION,
+    )
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # JSON ingestion
 # ---------------------------------------------------------------------------
 
@@ -491,6 +549,9 @@ def _load_json_to_table(
     df = pd.DataFrame(records)
     df["_execution_date"] = execution_date
 
+    # ── Lakehouse: persist as compressed Parquet before PostgreSQL load ──
+    _write_lakehouse_parquet(df, "pos_store_sales")
+
     # Idempotent: remove any rows from a prior run on the same date.
     delete_by_execution_date(engine, table_name, execution_date)
 
@@ -510,7 +571,7 @@ def _load_json_to_table(
 
 
 # ---------------------------------------------------------------------------
-# Schema harmonisation & unified upsert
+# Schema harmonisation — DuckDB OLAP layer (reads Parquet, writes unified)
 # ---------------------------------------------------------------------------
 
 _UNIFIED_TABLE = "raw.unified_transactions"
@@ -529,32 +590,27 @@ CREATE TABLE IF NOT EXISTS {table} (
     payment_method   TEXT,
     discount_pct     INTEGER,
     shipping_days    INTEGER,
+    _execution_date  DATE,
     ingested_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (transaction_id, source_system)
 );
 """
 
-_UPSERT_SQL = """
-INSERT INTO {table} (
-    transaction_id, source_system, product_id, quantity,
-    transaction_date, total_amount, store_id, customer_id,
-    status, payment_method, discount_pct, shipping_days, ingested_at
-)
+_DUCKDB_HARMONIZE_SQL = """
 SELECT
     order_id               AS transaction_id,
     'online'               AS source_system,
     product_id,
     quantity,
     order_date::date       AS transaction_date,
-    NULL::numeric          AS total_amount,   -- revenue calc happens in dbt
+    NULL::numeric          AS total_amount,
     NULL::text             AS store_id,
     customer_id,
     status,
     NULL::text             AS payment_method,
     discount_pct,
-    shipping_days,
-    NOW()                  AS ingested_at
-FROM raw.orders
+    shipping_days
+FROM read_parquet('{orders_path}')
 
 UNION ALL
 
@@ -570,51 +626,109 @@ SELECT
     'completed'            AS status,
     payment_method,
     NULL::integer          AS discount_pct,
-    NULL::integer          AS shipping_days,
-    NOW()                  AS ingested_at
-FROM raw.pos_store_sales
-
-ON CONFLICT (transaction_id, source_system) DO UPDATE SET
-    product_id       = EXCLUDED.product_id,
-    quantity         = EXCLUDED.quantity,
-    transaction_date = EXCLUDED.transaction_date,
-    total_amount     = EXCLUDED.total_amount,
-    store_id         = EXCLUDED.store_id,
-    status           = EXCLUDED.status,
-    payment_method   = EXCLUDED.payment_method,
-    ingested_at      = NOW();
+    NULL::integer          AS shipping_days
+FROM read_parquet('{pos_path}')
 """
 
 
-def _harmonize_and_upsert_unified(engine: Engine) -> int:
-    """Create (if missing) and upsert into ``raw.unified_transactions``.
+def _duckdb_harmonize(engine: Engine, execution_date: str) -> int:
+    """Read Parquet from ``data/lakehouse/`` via DuckDB, harmonise schemas,
+    and upsert the unified transactions table in PostgreSQL.
 
-    Harmonises columns from ``raw.orders`` (online) and
-    ``raw.pos_store_sales`` (POS) into a single unified schema.
+    This replaces the old PostgreSQL-based ``_harmonize_and_upsert_unified``
+    with an embedded DuckDB OLAP layer.  The harmonisation SQL is identical
+    in semantics to the previous ``_UPSERT_SQL``, but DuckDB reads directly
+    from the compressed Parquet files, avoiding a round-trip through the
+    PostgreSQL raw tables for the staging aggregations.
+
+    Idempotency is preserved via ``delete_by_execution_date()`` — any rows
+    from a prior run on the same execution date are removed before the
+    batch insert.
 
     Args:
         engine: SQLAlchemy Engine instance.
+        execution_date: ISO date string for the current run.
 
     Returns:
         Number of rows upserted.
     """
-    logger.info("Creating unified transactions table if missing ...")
+    orders_path = os.path.join(LAKEHOUSE_DIR, "orders.parquet")
+    pos_path = os.path.join(LAKEHOUSE_DIR, "pos_store_sales.parquet")
+
+    # ── Guard: skip harmonisation if neither source file exists ─────────
+    orders_exists = os.path.exists(orders_path)
+    pos_exists = os.path.exists(pos_path)
+    if not orders_exists and not pos_exists:
+        logger.warning(
+            "No Parquet files found in %s — skipping DuckDB harmonisation.",
+            LAKEHOUSE_DIR,
+        )
+        return 0
+
+    # ── Build SQL with only the files that exist ────────────────────────
+    parts: List[str] = []
+    if orders_exists:
+        parts.append(
+            f"SELECT order_id AS transaction_id, 'online' AS source_system, "
+            f"product_id, quantity, order_date::date AS transaction_date, "
+            f"NULL::numeric AS total_amount, NULL::text AS store_id, "
+            f"customer_id, status, NULL::text AS payment_method, "
+            f"discount_pct, shipping_days "
+            f"FROM read_parquet('{orders_path}')"
+        )
+    if pos_exists:
+        parts.append(
+            f"SELECT sale_id AS transaction_id, 'pos' AS source_system, "
+            f"product_id, quantity, "
+            f"transaction_timestamp::date AS transaction_date, "
+            f"total_amount AS total_amount, store_id, "
+            f"NULL::text AS customer_id, 'completed' AS status, "
+            f"payment_method, NULL::integer AS discount_pct, "
+            f"NULL::integer AS shipping_days "
+            f"FROM read_parquet('{pos_path}')"
+        )
+
+    union_sql = " UNION ALL ".join(parts)
+
+    # ── Execute harmonisation in DuckDB ────────────────────────────────
+    con = duckdb.connect()
+    try:
+        unified_df = con.execute(union_sql).fetchdf()
+    finally:
+        con.close()
+
+    if unified_df.empty:
+        logger.info("DuckDB harmonisation produced zero rows — skipping.")
+        return 0
+
+    # Tag with the current execution date for idempotent deletes.
+    unified_df["_execution_date"] = execution_date
+
+    # ── Create / update the PostgreSQL unified table ────────────────────
     ddl = _UNIFIED_DDL.format(table=_UNIFIED_TABLE)
     with engine.connect() as conn:
         conn.exec_driver_sql(ddl)
         conn.commit()
 
-    logger.info("Upserting harmonised transactions ...")
-    upsert = _UPSERT_SQL.format(table=_UNIFIED_TABLE)
-    with engine.connect() as conn:
-        result = conn.execute(text(upsert))
-        conn.commit()
+    # Idempotent: remove any rows from a prior run on the same date.
+    delete_by_execution_date(engine, _UNIFIED_TABLE, execution_date)
 
-    count = result.rowcount
+    unified_df.to_sql(
+        _UNIFIED_TABLE.split(".")[1],
+        engine,
+        schema="raw",
+        if_exists="append",
+        index=False,
+        method="multi",
+    )
+
+    count = len(unified_df)
     logger.info(
-        "Unified transactions upserted: %d rows into %s",
+        "DuckDB harmonisation complete: %d row(s) upserted into %s "
+        "(execution_date=%s)",
         count,
         _UNIFIED_TABLE,
+        execution_date,
     )
     return count
 
@@ -767,6 +881,8 @@ def load_csv_to_table(
     total_loaded = 0
     total_rejected = 0
     entity_name = csv_filename.replace(".csv", "").rstrip("s")
+    parquet_entity = csv_filename.replace(".csv", "")
+    clean_chunks: List[pd.DataFrame] = []
 
     for chunk in pd.read_csv(filepath, dtype=DTYPE_MAP, chunksize=chunk_size):
         clean_chunk, rejected_chunk = _validate_and_split(
@@ -790,10 +906,16 @@ def load_csv_to_table(
                 method="multi",
             )
             total_loaded += len(clean_chunk)
+            clean_chunks.append(clean_chunk)
 
         if not rejected_chunk.empty:
             _write_dlq(entity_name, rejected_chunk)
             total_rejected += len(rejected_chunk)
+
+    # ── Lakehouse: concatenate all clean chunks and persist as Parquet ──
+    if clean_chunks:
+        lakehouse_df = pd.concat(clean_chunks, ignore_index=True)
+        _write_lakehouse_parquet(lakehouse_df, parquet_entity)
 
     logger.info(
         "Loaded %d rows into %s, rejected %d to DLQ "
@@ -905,8 +1027,10 @@ def main() -> None:
                 grand_rejected += rejected
                 per_table[filename] = {"loaded": loaded, "rejected": rejected}
 
-        # Schema harmonisation: merge online + POS into unified table.
-        unified_count = _harmonize_and_upsert_unified(engine)
+        # Schema harmonisation via embedded DuckDB OLAP layer.
+        # Reads Parquet files from data/lakehouse/ and writes to
+        # raw.unified_transactions.
+        unified_count = _duckdb_harmonize(engine, execution_date)
         per_table["_unified_transactions"] = {
             "loaded": unified_count,
             "rejected": 0,
@@ -914,9 +1038,9 @@ def main() -> None:
 
         elapsed = (datetime.now() - start_time).total_seconds()
         logger.info(
-            "Hybrid ingestion complete! Loaded %d clean rows, "
+            "Hybrid ingestion + Lakehouse complete! Loaded %d clean rows, "
             "rejected %d bad rows to DLQ, "
-            "harmonised %d unified transactions in %.2f seconds.",
+            "harmonised %d unified transactions via DuckDB in %.2f seconds.",
             grand_loaded,
             grand_rejected,
             unified_count,
