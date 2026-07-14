@@ -3,10 +3,17 @@
 -- Cleans and standardizes the raw orders table:
 --   - Casts string dates to proper date types
 --   - Filters out rows with null customer or product references
---   - Renames columns for clarity
+--   - Filters to the latest _execution_date to eliminate duplicates
+--     from idempotent pipeline runs across calendar days.
 
 WITH source AS (
     SELECT * FROM {{ source('raw', 'orders') }}
+),
+
+latest AS (
+    SELECT *
+    FROM source
+    WHERE _execution_date = (SELECT MAX(_execution_date) FROM source)
 ),
 
 cleaned AS (
@@ -32,7 +39,7 @@ cleaned AS (
         -- Shipping metadata
         shipping_days
 
-    FROM source
+    FROM latest
     -- WHY: Remove orphaned records that can't be linked to customers or products.
     WHERE customer_id IS NOT NULL
       AND product_id IS NOT NULL

@@ -3,10 +3,18 @@
 -- Cleans and standardizes the raw customers table:
 --   - Trims whitespace from name/email fields
 --   - Casts signup_date to a proper DATE type
---   - Removes duplicate customer records
+--   - Deduplicates by natural key (email) to survive idempotent
+--     pipeline runs where the same person gets a different
+--     customer_id UUID each day.
 
 WITH source AS (
     SELECT * FROM {{ source('raw', 'customers') }}
+),
+
+latest AS (
+    SELECT *
+    FROM source
+    WHERE _execution_date = (SELECT MAX(_execution_date) FROM source)
 ),
 
 cleaned AS (
@@ -20,14 +28,18 @@ cleaned AS (
         CAST(signup_date AS DATE) AS signup_date,
         age,
         TRIM(gender) AS gender
-    FROM source
+    FROM latest
     WHERE customer_id IS NOT NULL
 ),
 
 deduped AS (
-    -- WHY: Remove duplicate customer records based on customer_id.
-    -- Using ROW_NUMBER ensures we keep exactly one row per customer.
-    SELECT DISTINCT * FROM cleaned
+    -- WHY: uuid.uuid4() generates random UUIDs per run (not seeded),
+    -- so the same real customer gets a different customer_id every day.
+    -- Deduplicating by email (the natural business key) keeps one row
+    -- per unique person, which makes the unique email test valid.
+    SELECT DISTINCT ON (email) *
+    FROM cleaned
+    ORDER BY email, customer_id
 )
 
 SELECT * FROM deduped
