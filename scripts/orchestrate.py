@@ -33,6 +33,13 @@ from dotenv import load_dotenv
 logger = logging.getLogger("orchestrate")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_LAKEHOUSE_DIR = str(PROJECT_ROOT / "data" / "lakehouse")
+
+# WHY: Ensure the scripts package is importable when run directly.
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from scripts.audit import AuditContext  # noqa: E402
 
 # ── Pre-flight health check ────────────────────────────────────────────
 
@@ -665,7 +672,12 @@ def main() -> None:
 
     _run_preflight_checks()
 
+    # ── Audit context — always writes a row, even on failure ────────────
+    audit = AuditContext(lakehouse_dir=_LAKEHOUSE_DIR)
     pipeline_start = time.monotonic()
+    pipeline_status: str = "SUCCESS"
+    pipeline_error: str = ""
+    sla_breached: bool = False
 
     print()
     print("+" + "=" * 70 + "+")
@@ -679,83 +691,111 @@ def main() -> None:
     # ── Phase duration tracking ─────────────────────────────────────────
     phase_durations: Dict[str, float] = {"Ingestion": 0.0, "Transformation": 0.0, "Consumption": 0.0}
 
-    for step_num, (step_name, step_fn) in enumerate(PIPELINE_STEPS, start=1):
-        print(_step_box(step_num, total_steps, step_name))
-        step_start = time.monotonic()
+    try:
+        for step_num, (step_name, step_fn) in enumerate(PIPELINE_STEPS, start=1):
+            print(_step_box(step_num, total_steps, step_name))
+            step_start = time.monotonic()
 
-        try:
-            if step_name == "Generate Data":
-                rc = step_fn(profile=args.profile)
-            else:
-                rc = step_fn()
-        except Exception as exc:
-            logger.critical(
-                "Unhandled exception in step '%s': %s",
-                step_name,
-                exc,
-                exc_info=True,
-            )
-            rc = -1
-
-        elapsed = time.monotonic() - step_start
-
-        # Accumulate phase duration.
-        phase = _PHASE_MAP.get(step_name, "Consumption")
-        phase_durations[phase] = phase_durations.get(phase, 0.0) + elapsed
-
-        if rc == 0:
-            logger.info(STEP_OK.format(name=step_name, elapsed=elapsed))
-            # Ingestion-phase alerts: DLQ, schema drift.
-            if step_name == "Load to PostgreSQL":
-                _send_ingestion_alert()
-                _send_schema_drift_alerts(
-                    _last_schema_drift_critical,
-                    _last_schema_drift_warning,
+            try:
+                if step_name == "Generate Data":
+                    rc = step_fn(profile=args.profile)
+                else:
+                    rc = step_fn()
+            except Exception as exc:
+                logger.critical(
+                    "Unhandled exception in step '%s': %s",
+                    step_name,
+                    exc,
+                    exc_info=True,
                 )
-        else:
-            logger.critical(STEP_FAIL.format(name=step_name, code=rc))
-            # Circuit breaker: dispatch critical alert before exiting.
-            _send_step_failure_alert(step_name, rc)
+                rc = -1
+
+            elapsed = time.monotonic() - step_start
+
+            # Accumulate phase duration.
+            phase = _PHASE_MAP.get(step_name, "Consumption")
+            phase_durations[phase] = phase_durations.get(phase, 0.0) + elapsed
+
+            if rc == 0:
+                logger.info(STEP_OK.format(name=step_name, elapsed=elapsed))
+                # Ingestion-phase: capture telemetry + dispatch alerts.
+                if step_name == "Load to PostgreSQL":
+                    audit.ingest_from_dlq(_last_dlq_data)
+                    audit.collect_parquet_paths()
+                    _send_ingestion_alert()
+                    _send_schema_drift_alerts(
+                        _last_schema_drift_critical,
+                        _last_schema_drift_warning,
+                    )
+            else:
+                logger.critical(STEP_FAIL.format(name=step_name, code=rc))
+                pipeline_status = "SCHEMA_DRIFT" if rc == 2 else "FAILED"
+                pipeline_error = (
+                    f"Step '{step_name}' failed with exit code {rc}"
+                )
+                # Circuit breaker: dispatch critical alert before exiting.
+                _send_step_failure_alert(step_name, rc)
+                print()
+                print("+" + "=" * 70 + "+")
+                halt_reason = (
+                    "SCHEMA DRIFT — Critical schema change detected. "
+                    "Source file quarantined."
+                    if rc == 2
+                    else "Pipeline halted by circuit breaker."
+                )
+                print("|  FAIL  %s" % halt_reason)
+                print("|  Step '%s' failed with exit code %d." % (step_name, rc))
+                print("|  Subsequent steps were skipped.")
+                print("+" + "=" * 70 + "+")
+                sys.exit(1)
+
             print()
-            print("+" + "=" * 70 + "+")
-            halt_reason = (
-                "SCHEMA DRIFT — Critical schema change detected. "
-                "Source file quarantined."
-                if rc == 2
-                else "Pipeline halted by circuit breaker."
-            )
-            print("|  FAIL  %s" % halt_reason)
-            print("|  Step '%s' failed with exit code %d." % (step_name, rc))
-            print("|  Subsequent steps were skipped.")
-            print("+" + "=" * 70 + "+")
-            sys.exit(1)
+
+        # ── All steps succeeded — compute final metrics ─────────────
+        total_elapsed = time.monotonic() - pipeline_start
+        sla_breached = total_elapsed > args.sla_seconds
+        _send_success_alert(total_elapsed, phase_durations, args.sla_seconds)
 
         print()
+        phase_line = (
+            "|  Ingestion: {ing:.2f}s  |  Transformation: {tx:.2f}s"
+            "  |  Consumption: {con:.2f}s"
+        ).format(
+            ing=phase_durations.get("Ingestion", 0),
+            tx=phase_durations.get("Transformation", 0),
+            con=phase_durations.get("Consumption", 0),
+        )
+        sla_status = "SLA BREACHED" if sla_breached else "SLA OK"
+        print()
+        print("+" + "=" * 70 + "+")
+        print("|  %s  PIPELINE COMPLETE" % ("WARN" if sla_breached else "OK"))
+        msg = "|  All %d steps succeeded in %.2f seconds.  SLA: %s (max %.0fs)" % (
+            total_steps, total_elapsed, sla_status, args.sla_seconds,
+        )
+        print(msg)
+        print(phase_line)
+        print("+" + "=" * 70 + "+")
+        print()
 
-    total_elapsed = time.monotonic() - pipeline_start
-    sla_breached = total_elapsed > args.sla_seconds
-    _send_success_alert(total_elapsed, phase_durations, args.sla_seconds)
-
-    print()
-    phase_line = (
-        "|  Ingestion: {ing:.2f}s  |  Transformation: {tx:.2f}s"
-        "  |  Consumption: {con:.2f}s"
-    ).format(
-        ing=phase_durations.get("Ingestion", 0),
-        tx=phase_durations.get("Transformation", 0),
-        con=phase_durations.get("Consumption", 0),
-    )
-    sla_status = "SLA BREACHED" if sla_breached else "SLA OK"
-    print()
-    print("+" + "=" * 70 + "+")
-    print("|  %s  PIPELINE COMPLETE" % ("WARN" if sla_breached else "OK"))
-    msg = "|  All %d steps succeeded in %.2f seconds.  SLA: %s (max %.0fs)" % (
-        total_steps, total_elapsed, sla_status, args.sla_seconds,
-    )
-    print(msg)
-    print(phase_line)
-    print("+" + "=" * 70 + "+")
-    print()
+    except SystemExit:
+        # Circuit breaker — pipeline_status and pipeline_error already set.
+        raise
+    except Exception as exc:
+        pipeline_status = "FAILED"
+        pipeline_error = f"Unhandled exception: {exc}"
+        logger.critical(pipeline_error, exc_info=True)
+        raise
+    finally:
+        # ── Always write the audit record, even on failure ──────────
+        total_elapsed = time.monotonic() - pipeline_start
+        audit.ingest_from_dlq(_last_dlq_data)
+        audit.collect_parquet_paths()
+        audit.finalize(
+            status=pipeline_status,
+            sla_breached=sla_breached,
+            error_message=pipeline_error,
+        )
+        audit.commit()
 
 
 if __name__ == "__main__":
