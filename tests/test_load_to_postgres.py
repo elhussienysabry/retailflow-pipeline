@@ -39,6 +39,8 @@ from scripts.load_to_postgres import (  # noqa: E402
     _write_lakehouse_parquet,
     _duckdb_harmonize,
     _move_to_rejected_schemas,
+    _hive_partition_path,
+    clean_lakehouse_partition,
     _UNIFIED_DDL,
 )
 
@@ -411,6 +413,59 @@ class TestWriteDlq:
                 assert "missing customer_id" in content
 
 
+class TestHivePartitionPath:
+    """Tests for the _hive_partition_path helper."""
+
+    def test_returns_correct_hive_path(self) -> None:
+        with patch(
+            "scripts.load_to_postgres.LAKEHOUSE_DIR",
+            "/base/lakehouse",
+        ):
+            path = _hive_partition_path("customers", "2026-07-14")
+            expected = os.path.join(
+                "/base/lakehouse", "customers",
+                "year=2026", "month=07", "day=14",
+            )
+            assert path == expected
+
+    def test_includes_lakehouse_root(self) -> None:
+        with patch(
+            "scripts.load_to_postgres.LAKEHOUSE_DIR",
+            "/base/lakehouse",
+        ):
+            path = _hive_partition_path("orders", "2026-01-05")
+            expected_prefix = os.path.join("/base/lakehouse", "orders")
+            assert path.startswith(expected_prefix)
+
+
+class TestCleanLakehousePartition:
+    """Tests for the clean_lakehouse_partition function."""
+
+    def test_removes_existing_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            partition = Path(tmpdir) / "customers" / "year=2026" / "month=07" / "day=14"
+            partition.mkdir(parents=True)
+            (partition / "data.parquet").write_text("dummy")
+            assert partition.exists()
+
+            with patch(
+                "scripts.load_to_postgres.LAKEHOUSE_DIR",
+                str(Path(tmpdir)),
+            ):
+                result = clean_lakehouse_partition("customers", "2026-07-14")
+                assert result is True
+                assert not partition.exists()
+
+    def test_non_existent_partition_returns_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "scripts.load_to_postgres.LAKEHOUSE_DIR",
+                str(Path(tmpdir)),
+            ):
+                result = clean_lakehouse_partition("customers", "2026-07-14")
+                assert result is False
+
+
 class TestWriteLakehouseParquet:
     """Tests for the _write_lakehouse_parquet function."""
 
@@ -422,11 +477,15 @@ class TestWriteLakehouseParquet:
                 str(lakehouse),
             ):
                 df = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
-                out_path = _write_lakehouse_parquet(df, "test_entity")
+                out_path = _write_lakehouse_parquet(df, "test_entity", "2026-07-14")
                 assert out_path
                 parquet_file = Path(out_path)
                 assert parquet_file.exists()
                 assert parquet_file.suffix == ".parquet"
+                # Verify Hive-partitioned directory structure.
+                assert "year=2026" in str(parquet_file)
+                assert "month=07" in str(parquet_file)
+                assert "day=14" in str(parquet_file)
                 # Verify we can read it back.
                 result = pd.read_parquet(str(parquet_file))
                 assert len(result) == 2
@@ -434,7 +493,7 @@ class TestWriteLakehouseParquet:
 
     def test_empty_df_returns_empty_string(self) -> None:
         df = pd.DataFrame()
-        result = _write_lakehouse_parquet(df, "empty_entity")
+        result = _write_lakehouse_parquet(df, "empty_entity", "2026-07-14")
         assert result == ""
 
     def test_uses_configured_compression(self) -> None:
@@ -459,7 +518,11 @@ class TestDuckdbHarmonize:
             lakehouse = Path(tmpdir) / "lakehouse"
             lakehouse.mkdir()
 
-            # Write a minimal orders.parquet
+            # Write a minimal orders.parquet in Hive-partitioned structure.
+            orders_partition = (
+                lakehouse / "orders" / "year=2026" / "month=07" / "day=13"
+            )
+            orders_partition.mkdir(parents=True)
             orders_df = pd.DataFrame({
                 "order_id": ["o1", "o2"],
                 "product_id": ["p1", "p2"],
@@ -470,9 +533,15 @@ class TestDuckdbHarmonize:
                 "discount_pct": [0, 10],
                 "shipping_days": [3, 5],
             })
-            orders_df.to_parquet(str(lakehouse / "orders.parquet"), index=False)
+            orders_df.to_parquet(
+                str(orders_partition / "orders.parquet"), index=False,
+            )
 
-            # Write a minimal pos_store_sales.parquet
+            # Write a minimal pos_store_sales.parquet in Hive-partitioned structure.
+            pos_partition = (
+                lakehouse / "pos_store_sales" / "year=2026" / "month=07" / "day=13"
+            )
+            pos_partition.mkdir(parents=True)
             pos_df = pd.DataFrame({
                 "sale_id": ["s1"],
                 "store_id": ["STORE_001"],
@@ -483,7 +552,9 @@ class TestDuckdbHarmonize:
                 "transaction_timestamp": ["2026-01-03T10:00:00"],
                 "payment_method": ["credit_card"],
             })
-            pos_df.to_parquet(str(lakehouse / "pos_store_sales.parquet"), index=False)
+            pos_df.to_parquet(
+                str(pos_partition / "pos_store_sales.parquet"), index=False,
+            )
 
             mock_conn = MagicMock()
             mock_engine = MagicMock()
@@ -505,6 +576,10 @@ class TestDuckdbHarmonize:
         with tempfile.TemporaryDirectory() as tmpdir:
             lakehouse = Path(tmpdir) / "lakehouse"
             lakehouse.mkdir()
+            orders_partition = (
+                lakehouse / "orders" / "year=2026" / "month=07" / "day=13"
+            )
+            orders_partition.mkdir(parents=True)
             orders_df = pd.DataFrame({
                 "order_id": ["o1"],
                 "product_id": ["p1"],
@@ -515,7 +590,9 @@ class TestDuckdbHarmonize:
                 "discount_pct": [0],
                 "shipping_days": [2],
             })
-            orders_df.to_parquet(str(lakehouse / "orders.parquet"), index=False)
+            orders_df.to_parquet(
+                str(orders_partition / "orders.parquet"), index=False,
+            )
 
             mock_conn = MagicMock()
             mock_engine = MagicMock()
