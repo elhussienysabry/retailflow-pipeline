@@ -102,7 +102,7 @@ class AuditContext:
         if not lakehouse.is_dir():
             return
         paths: List[str] = []
-        for f in sorted(lakehouse.glob("*.parquet")):
+        for f in sorted(lakehouse.glob("**/*.parquet")):
             paths.append(str(f.resolve()))
         self.parquet_file_path = ", ".join(paths)
 

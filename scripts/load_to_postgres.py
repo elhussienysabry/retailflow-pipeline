@@ -35,6 +35,7 @@ Environment variables (from .env):
     POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
 """
 
+import argparse
 import hashlib
 import json
 import logging
@@ -165,6 +166,28 @@ LAKEHOUSE_DIR = os.path.join(
     os.path.dirname(__file__), "..", "data", "lakehouse"
 )
 PARQUET_COMPRESSION = "snappy"
+
+
+def _hive_partition_path(entity_name: str, execution_date: str) -> str:
+    """Build a Hive-style partitioned directory path.
+
+    Returns ``data/lakehouse/{entity}/year=YYYY/month=MM/day=DD/``.
+
+    Args:
+        entity_name: Logical entity name (e.g. ``"customers"``).
+        execution_date: ISO date string (``"YYYY-MM-DD"``).
+
+    Returns:
+        Absolute path to the Hive partition directory.
+    """
+    dt = datetime.strptime(execution_date, "%Y-%m-%d")
+    return os.path.join(
+        LAKEHOUSE_DIR,
+        entity_name,
+        f"year={dt.year:04d}",
+        f"month={dt.month:02d}",
+        f"day={dt.day:02d}",
+    )
 
 
 def _normalize_dtype(dtype_str: str) -> str:
@@ -475,18 +498,21 @@ def _write_dlq(entity_name: str, rejected_df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write_lakehouse_parquet(df: pd.DataFrame, entity_name: str) -> str:
-    """Write a clean DataFrame to ``data/lakehouse/`` as compressed Parquet.
+def _write_lakehouse_parquet(
+    df: pd.DataFrame, entity_name: str, execution_date: str
+) -> str:
+    """Write a clean DataFrame to ``data/lakehouse/`` as Hive-partitioned Parquet.
 
-    The file is written with Snappy compression.  If the file already
-    exists from a prior run on the same day it is overwritten, which is
-    safe because the idempotency layer deletes-and-reinserts by
-    execution_date.
+    The dataset is physically partitioned on disk by execution date into
+    ``year=YYYY/month=MM/day=DD/`` directories.  The existing partition
+    for the given date is removed before writing so that re-running on the
+    same date is idempotent — no stale leftover files survive.
 
     Args:
         df: Clean DataFrame (already PII-hashed, validated).
-        entity_name: Logical entity name used as the file stem
+        entity_name: Logical entity name used as the directory stem
             (e.g. ``"customers"``, ``"orders"``, ``"pos_store_sales"``).
+        execution_date: ISO date string for Hive partitioning.
 
     Returns:
         Absolute path to the written ``.parquet`` file.
@@ -495,9 +521,14 @@ def _write_lakehouse_parquet(df: pd.DataFrame, entity_name: str) -> str:
         logger.warning("Skipping Parquet write for %s — DataFrame is empty.", entity_name)
         return ""
 
-    os.makedirs(LAKEHOUSE_DIR, exist_ok=True)
-    out_path = os.path.join(LAKEHOUSE_DIR, f"{entity_name}.parquet")
+    partition_path = _hive_partition_path(entity_name, execution_date)
 
+    # Clean slate: remove any stale files from a prior run on the same date.
+    if os.path.isdir(partition_path):
+        shutil.rmtree(partition_path)
+    os.makedirs(partition_path, exist_ok=True)
+
+    out_path = os.path.join(partition_path, f"{entity_name}.parquet")
     df.to_parquet(
         out_path,
         compression=PARQUET_COMPRESSION,
@@ -549,8 +580,8 @@ def _load_json_to_table(
     df = pd.DataFrame(records)
     df["_execution_date"] = execution_date
 
-    # ── Lakehouse: persist as compressed Parquet before PostgreSQL load ──
-    _write_lakehouse_parquet(df, "pos_store_sales")
+    # ── Lakehouse: persist as Hive-partitioned Parquet before PostgreSQL load ──
+    _write_lakehouse_parquet(df, "pos_store_sales", execution_date)
 
     # Idempotent: remove any rows from a prior run on the same date.
     delete_by_execution_date(engine, table_name, execution_date)
@@ -652,20 +683,32 @@ def _duckdb_harmonize(engine: Engine, execution_date: str) -> int:
     Returns:
         Number of rows upserted.
     """
-    orders_path = os.path.join(LAKEHOUSE_DIR, "orders.parquet")
-    pos_path = os.path.join(LAKEHOUSE_DIR, "pos_store_sales.parquet")
+    dt = datetime.strptime(execution_date, "%Y-%m-%d")
+    orders_glob = os.path.join(
+        LAKEHOUSE_DIR, "orders",
+        f"year={dt.year:04d}", f"month={dt.month:02d}", f"day={dt.day:02d}",
+        "*.parquet",
+    )
+    pos_glob = os.path.join(
+        LAKEHOUSE_DIR, "pos_store_sales",
+        f"year={dt.year:04d}", f"month={dt.month:02d}", f"day={dt.day:02d}",
+        "*.parquet",
+    )
 
-    # ── Guard: skip harmonisation if neither source file exists ─────────
-    orders_exists = os.path.exists(orders_path)
-    pos_exists = os.path.exists(pos_path)
+    orders_dir = os.path.join(LAKEHOUSE_DIR, "orders")
+    pos_dir = os.path.join(LAKEHOUSE_DIR, "pos_store_sales")
+
+    # ── Guard: skip harmonisation if neither source directory exists ────
+    orders_exists = os.path.isdir(orders_dir)
+    pos_exists = os.path.isdir(pos_dir)
     if not orders_exists and not pos_exists:
         logger.warning(
-            "No Parquet files found in %s — skipping DuckDB harmonisation.",
+            "No Lakehouse directories found in %s — skipping DuckDB harmonisation.",
             LAKEHOUSE_DIR,
         )
         return 0
 
-    # ── Build SQL with only the files that exist ────────────────────────
+    # ── Build SQL with only the directories that exist ──────────────────
     parts: List[str] = []
     if orders_exists:
         parts.append(
@@ -674,7 +717,7 @@ def _duckdb_harmonize(engine: Engine, execution_date: str) -> int:
             f"NULL::numeric AS total_amount, NULL::text AS store_id, "
             f"customer_id, status, NULL::text AS payment_method, "
             f"discount_pct, shipping_days "
-            f"FROM read_parquet('{orders_path}')"
+            f"FROM read_parquet('{orders_glob}')"
         )
     if pos_exists:
         parts.append(
@@ -685,7 +728,7 @@ def _duckdb_harmonize(engine: Engine, execution_date: str) -> int:
             f"NULL::text AS customer_id, 'completed' AS status, "
             f"payment_method, NULL::integer AS discount_pct, "
             f"NULL::integer AS shipping_days "
-            f"FROM read_parquet('{pos_path}')"
+            f"FROM read_parquet('{pos_glob}')"
         )
 
     union_sql = " UNION ALL ".join(parts)
@@ -912,10 +955,11 @@ def load_csv_to_table(
             _write_dlq(entity_name, rejected_chunk)
             total_rejected += len(rejected_chunk)
 
-    # ── Lakehouse: concatenate all clean chunks and persist as Parquet ──
+    # ── Lakehouse: concatenate all clean chunks and persist as
+    # Hive-partitioned Parquet ───────────────────────────────────────────
     if clean_chunks:
         lakehouse_df = pd.concat(clean_chunks, ignore_index=True)
-        _write_lakehouse_parquet(lakehouse_df, parquet_entity)
+        _write_lakehouse_parquet(lakehouse_df, parquet_entity, execution_date)
 
     logger.info(
         "Loaded %d rows into %s, rejected %d to DLQ "
@@ -927,25 +971,75 @@ def load_csv_to_table(
     )
     return total_loaded, total_rejected
 
+# ---------------------------------------------------------------------------
+# Lakehouse partition cleanup helpers
+# ---------------------------------------------------------------------------
+
+
+def clean_lakehouse_partition(entity_name: str, execution_date: str) -> bool:
+    """Remove the Hive partition directory for a given entity and date.
+
+    Args:
+        entity_name: Logical entity name (e.g. ``"customers"``).
+        execution_date: ISO date string (``"YYYY-MM-DD"``).
+
+    Returns:
+        ``True`` if a directory was removed, ``False`` if none existed.
+    """
+    partition_path = _hive_partition_path(entity_name, execution_date)
+    if os.path.isdir(partition_path):
+        shutil.rmtree(partition_path)
+        logger.info("Removed lakehouse partition: %s", partition_path)
+        return True
+    return False
+
+
+def clean_all_lakehouse_partitions(execution_date: str) -> None:
+    """Remove Hive partition directories for every known entity.
+
+    Args:
+        execution_date: ISO date string (``"YYYY-MM-DD"``).
+    """
+    for filename, _, _ in SOURCE_MAP:
+        entity_name = filename.replace(".csv", "").replace(".json", "")
+        clean_lakehouse_partition(entity_name, execution_date)
+
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
+
+def parse_args_cli() -> argparse.Namespace:
+    """Parse command-line arguments for standalone runs."""
+    parser = argparse.ArgumentParser(
+        description="Load raw data into PostgreSQL raw schema + Lakehouse Parquet.",
+    )
+    parser.add_argument(
+        "--execution-date",
+        type=str,
+        default=None,
+        help="Execution date in YYYY-MM-DD format (default: today UTC)",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     """Connect to PostgreSQL, validate, load clean rows, write DLQ.
 
     Every row loaded is tagged with ``_execution_date`` set to today's UTC
-    date.  Before inserting, any rows from a prior run on the same date are
-    deleted — guaranteeing idempotent re-runs (zero duplicates).
+    date (or the value of ``--execution-date``).  Before inserting, any rows
+    from a prior run on the same date are deleted — guaranteeing idempotent
+    re-runs (zero duplicates).
     """
+    args = parse_args_cli()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
     # ── Generate the idempotency execution date once per run ──────────
-    execution_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    execution_date = args.execution_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     logger.info(
         "Idempotent run — execution_date=%s", execution_date
     )

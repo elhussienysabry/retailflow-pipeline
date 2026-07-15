@@ -24,9 +24,9 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Tuple
+from typing import Any, Dict, Generator, List, NamedTuple, Tuple
 
 from dotenv import load_dotenv
 
@@ -104,6 +104,43 @@ def _run_preflight_checks() -> None:
     )
 
     _check_dbt_venv()
+
+
+# ---------------------------------------------------------------------------
+# Backfill helpers
+# ---------------------------------------------------------------------------
+
+
+def _validate_date(date_str: str) -> str:
+    """Validate an ISO date string and return it unchanged.
+
+    Raises ``argparse.ArgumentTypeError`` if the format is invalid.
+    """
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return date_str
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"'{date_str}' is not a valid YYYY-MM-DD date."
+        )
+
+
+def _daterange(start: str, end: str) -> Generator[str, None, None]:
+    """Yield ISO date strings from *start* to *end* inclusive.
+
+    Args:
+        start: Inclusive start date (``"YYYY-MM-DD"``).
+        end: Inclusive end date (``"YYYY-MM-DD"``).
+
+    Yields:
+        Each calendar date in the range as ``"YYYY-MM-DD"``.
+    """
+    current = datetime.strptime(start, "%Y-%m-%d")
+    end_dt = datetime.strptime(end, "%Y-%m-%d")
+    step = timedelta(days=1)
+    while current <= end_dt:
+        yield current.strftime("%Y-%m-%d")
+        current += step
 
 
 STEP_HEADER = """
@@ -513,17 +550,21 @@ def step_generate_data(profile: str = "medium") -> int:
     return result.returncode
 
 
-def step_load_to_postgres() -> int:
+def step_load_to_postgres(execution_date: str = None) -> int:
     """Step 2: Load CSV files into PostgreSQL raw schema with DLQ guardrail.
 
     Stores parsed schema drift data in module globals for alert
     dispatch after the step completes.
+
+    Args:
+        execution_date: Optional ISO date for backfill runs.
+            When ``None`` (default), the subprocess uses today's UTC date.
     """
     global _last_schema_drift_critical, _last_schema_drift_warning
-    result = _run_command(
-        [_py_exe(), str(PROJECT_ROOT / "scripts" / "load_to_postgres.py")],
-        label="load-to-postgres",
-    )
+    cmd = [_py_exe(), str(PROJECT_ROOT / "scripts" / "load_to_postgres.py")]
+    if execution_date:
+        cmd.extend(["--execution-date", execution_date])
+    result = _run_command(cmd, label="load-to-postgres")
     _log_dlq_summary(result.output)
     drift_critical, drift_warning = _parse_schema_drift_data(result.output)
     _log_schema_drift(drift_critical, drift_warning)
@@ -624,6 +665,47 @@ PIPELINE_STEPS: List[Tuple[str, callable]] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Pipeline builder — normal vs. backfill mode
+# ---------------------------------------------------------------------------
+
+
+def _build_pipeline(args: argparse.Namespace) -> List[Tuple[str, callable]]:
+    """Build the ordered list of (step_name, step_fn) for this run.
+
+    In **backfill mode** (``--start-date`` *and* ``--end-date`` provided),
+    the Generate Data and Load to PostgreSQL steps are repeated for every
+    calendar date in the range, followed by a single pass of the remaining
+    pipeline stages.  In **normal mode** the standard ``PIPELINE_STEPS``
+    list is used with the requested profile.
+    """
+    if args.start_date and args.end_date:
+        steps: List[Tuple[str, callable]] = []
+        for exec_date in _daterange(args.start_date, args.end_date):
+            # Capture by-value so the closure correctly remembers the date.
+            steps.append((
+                f"Generate Data ({exec_date})",
+                lambda ed=exec_date: step_generate_data(profile=args.profile),
+            ))
+            steps.append((
+                f"Load to PostgreSQL ({exec_date})",
+                lambda ed=exec_date: step_load_to_postgres(execution_date=ed),
+            ))
+        # Remaining stages (dbt, test, export, docs, lineage, profile) run
+        # once after all historical dates have been loaded.
+        for name, fn in PIPELINE_STEPS[2:]:
+            steps.append((name, lambda fn=fn: fn()))
+        return steps
+
+    # Normal mode — wrap every step as a zero-arity callable.
+    normal_steps: List[Tuple[str, callable]] = [
+        ("Generate Data", lambda: step_generate_data(profile=args.profile)),
+    ]
+    for name, fn in PIPELINE_STEPS[1:]:
+        normal_steps.append((name, lambda fn=fn: fn()))
+    return normal_steps
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="RetailFlow Pipeline — Orchestrator",
@@ -633,6 +715,8 @@ def parse_args() -> argparse.Namespace:
             "  python scripts/orchestrate.py\n"
             "  python scripts/orchestrate.py --profile small\n"
             "  python scripts/orchestrate.py --profile large\n"
+            "  python scripts/orchestrate.py --start-date 2026-07-01"
+            " --end-date 2026-07-14\n"
         ),
     )
     parser.add_argument(
@@ -652,12 +736,23 @@ def parse_args() -> argparse.Namespace:
             "(default: %s)" % _DEFAULT_SLA_SECONDS
         ),
     )
+    parser.add_argument(
+        "--start-date",
+        type=_validate_date,
+        default=None,
+        help="Backfill start date in YYYY-MM-DD format",
+    )
+    parser.add_argument(
+        "--end-date",
+        type=_validate_date,
+        default=None,
+        help="Backfill end date in YYYY-MM-DD format",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    total_steps = len(PIPELINE_STEPS)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -672,6 +767,10 @@ def main() -> None:
 
     _run_preflight_checks()
 
+    # ── Build the step pipeline (normal or backfill) ─────────────────---
+    pipeline = _build_pipeline(args)
+    total_steps = len(pipeline)
+
     # ── Audit context — always writes a row, even on failure ────────────
     audit = AuditContext(lakehouse_dir=_LAKEHOUSE_DIR)
     pipeline_start = time.monotonic()
@@ -679,10 +778,17 @@ def main() -> None:
     pipeline_error: str = ""
     sla_breached: bool = False
 
+    # ── Banner ──────────────────────────────────────────────────────────
+    mode = "BACKFILL" if args.start_date and args.end_date else "NORMAL"
+    date_range = ""
+    if args.start_date and args.end_date:
+        date_range = f"  Range: {args.start_date} → {args.end_date}"
     print()
     print("+" + "=" * 70 + "+")
-    print("|  RETAILFLOW PIPELINE ORCHESTRATOR")
+    print("|  RETAILFLOW PIPELINE ORCHESTRATOR  [{:s}]".format(mode))
     print("|  Profile: {:<51s}|".format(args.profile))
+    if date_range:
+        print("|{:s}{:<51s}|".format(date_range, ""))
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     print("|  Started: {:<49s}|".format(now_utc))
     print("+" + "=" * 70 + "+")
@@ -692,15 +798,12 @@ def main() -> None:
     phase_durations: Dict[str, float] = {"Ingestion": 0.0, "Transformation": 0.0, "Consumption": 0.0}
 
     try:
-        for step_num, (step_name, step_fn) in enumerate(PIPELINE_STEPS, start=1):
+        for step_num, (step_name, step_fn) in enumerate(pipeline, start=1):
             print(_step_box(step_num, total_steps, step_name))
             step_start = time.monotonic()
 
             try:
-                if step_name == "Generate Data":
-                    rc = step_fn(profile=args.profile)
-                else:
-                    rc = step_fn()
+                rc = step_fn()
             except Exception as exc:
                 logger.critical(
                     "Unhandled exception in step '%s': %s",
@@ -719,7 +822,8 @@ def main() -> None:
             if rc == 0:
                 logger.info(STEP_OK.format(name=step_name, elapsed=elapsed))
                 # Ingestion-phase: capture telemetry + dispatch alerts.
-                if step_name == "Load to PostgreSQL":
+                # Match both exact "Load to PostgreSQL" and backfill variants.
+                if "Load to PostgreSQL" in step_name:
                     audit.ingest_from_dlq(_last_dlq_data)
                     audit.collect_parquet_paths()
                     _send_ingestion_alert()
