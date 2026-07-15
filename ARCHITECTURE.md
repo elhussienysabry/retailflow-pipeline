@@ -1,7 +1,7 @@
 # RetailFlow Pipeline — Architecture & Data Lineage
 
 > **Audience:** Data engineers, solutions architects, engineering managers.
-> **Version:** v1.2.0
+> **Version:** v1.5.2
 > **Purpose:** Document the end-to-end data lifecycle, system boundaries, operational runbook, and production engineering patterns (schema drift detection, idempotent warehousing, dual-venv isolation, CI/CD automation, circuit-breaker alerting).
 
 ---
@@ -36,7 +36,7 @@ retailflow-pipeline/
 │
 ├── scripts/                      # Core Python ETL scripts (7 modules)
 │   ├── __init__.py
-│   ├── orchestrate.py            # 8-step pipeline orchestrator + circuit breaker + alert dispatch
+│   ├── orchestrate.py            # 9-step pipeline orchestrator + circuit breaker + alert dispatch
 │   ├── generate_fake_data.py     # Faker synthetic data (CSV + JSON) with scale profiles
 │   ├── load_to_postgres.py       # Hybrid ingestion, schema drift detector, PII anonymisation, unified upsert
 │   ├── generate_lineage.py       # NetworkX lineage graph renderer (200 DPI PNG)
@@ -54,16 +54,18 @@ retailflow-pipeline/
 │   │   ├── staging/              # Clean, cast, deduplicate (3 views)
 │   │   ├── intermediate/         # Join + enrich (1 view)
 │   │   └── marts/                # Business-ready star schema (2 dims + 1 fact table)
+│   ├── snapshots/                # SCD Type 2 snapshot (scd_customers)
 │   ├── tests/                    # Custom singular tests (2)
 │   ├── macros/                   # Jinja SQL macros
 │   ├── profiles.yml              # DB connection (env-var driven)
+│   ├── packages.yml              # dbt packages (dbt-labs/dbt_utils)
 │   └── dbt_project.yml           # dbt config
 │
 ├── sql/                          # Reference SQL
 │   ├── schema/                   # DDL (CREATE SCHEMA / TABLE)
 │   └── analytics/                # Business analysis queries
 │
-├── tests/                        # 155+ pytest tests (6 test modules)
+├── tests/                        # 174+ pytest tests (6 test modules)
 ├── data/
 │   ├── raw/                      # Generated CSVs + JSON (gitignored)
 │   ├── lakehouse/                # Snappy-compressed Parquet columnar lake (gitignored)
@@ -594,7 +596,7 @@ raw.products ──> stg_products ────┘           │
 
 | Model | Type | Grain | Key Measures | Materialisation |
 |-------|------|-------|-------------|-----------------|
-| `dim_customers` | Dimension | 1 row per customer | `total_orders`, `lifetime_value_cents` | Table (full refresh) |
+| `dim_customers` | Dimension (SCD Type 2) | 1 row per version per customer | `total_orders`, `lifetime_value_cents`, SCD metadata | Table (full refresh) |
 | `dim_products` | Dimension | 1 row per product | `total_orders`, `total_units_sold`, `total_revenue_cents` | Table (full refresh) |
 | `fct_orders` | Fact | 1 row per order line | `gross_revenue_dollars`, `net_revenue_dollars` | **Incremental** (`unique_key='order_id'`) |
 
@@ -625,25 +627,62 @@ SELECT ... FROM {{ ref('int_orders_enriched') }}
 | Custom singular | 2 | `assert_positive_revenue` (no negative net revenue), `assert_no_null_customer_id` in fct_orders |
 | Standard (generic) | 16 | Additional column-level constraints |
 
+### SCD Type 2 — Customer Dimension History
+
+**Objective:** Track full attribute history for each customer (name, email, country, city, age, gender) as data changes over time, enabling point-in-time analysis and audit trails.
+
+**Implementation:** dbt snapshot (`dbt/snapshots/scd_customers.sql`) configured with:
+
+| Setting | Value | Rationale |
+|---------|-------|-----------|
+| `unique_key` | `email` | Email is the stable natural business key for customers |
+| `strategy` | `timestamp` | Uses a timestamp column to detect changes |
+| `updated_at` | `_execution_date` | Each pipeline run tags rows with its execution date |
+| `invalidate_hard_deletes` | `True` | When a customer disappears from source, marks their last version with `dbt_valid_to` rather than deleting the row |
+
+**Snapshot columns added by dbt:**
+
+| Column | Purpose |
+|--------|---------|
+| `dbt_scd_id` | Surrogate key (hash of unique_key + valid_from) |
+| `dbt_valid_from` | Timestamp when this version became active |
+| `dbt_valid_to` | Timestamp when superseded; `NULL` = current version |
+| `dbt_updated_at` | Last update timestamp from source |
+
+**Impact on `dim_customers`:**
+
+- Primary key changed from `customer_id` to `customer_key` (surrogate = `dbt_utils.generate_surrogate_key(['email', 'dbt_valid_from'])`)
+- Added `dbt_valid_from`, `dbt_valid_to`, `is_current` columns
+- `customer_id` and `email` are no longer unique in this table (multiple rows per customer across versions)
+- Use `WHERE is_current = TRUE` for the classic 1-row-per-customer view
+
+**Pipeline integration:**
+
+```
+Step 3: dbt snapshot   → snapshots.scd_customers (SCD Type 2 history)
+Step 4: dbt run --marts → marts.dim_customers (reads from snapshots.scd_customers)
+```
+
 ---
 
 ## 7. Layer 4 — Orchestration Layer
 
 **Script:** `scripts/orchestrate.py`
 
-The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG with 8 steps, circuit breaker pattern, and cross-environment executable resolution.
+The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG with 9 steps, circuit breaker pattern, and cross-environment executable resolution.
 
 ### Step Sequence
 
 ```
 [1] Generate Data     .venv        Faker → 4 source files in data/raw/
 [2] Load PostgreSQL   .venv        Drift check → validate → PII hash → Parquet → load → DuckDB harmonise
-[3] dbt Run           .venv-dbt    staging (views) → intermediate (view) → marts (tables, full-refresh)
-[4] dbt Test          .venv-dbt    48 data quality tests; circuit breaker on failure
-[5] Excel Export      .venv        4 analytics sheets → styled .xlsx in outputs/
-[6] dbt Docs Gen      .venv-dbt    dbt compile + dbt docs generate → manifest.json + catalog.json
-[7] Lineage Graph     .venv        NetworkX parses manifest → 200 DPI PNG at docs/lineage/
-[8] Profile Report    .venv        Pandas profiles mart tables → interactive HTML at docs/profiling/
+[3] dbt Snapshot      .venv-dbt    SCD Type 2 snapshot (scd_customers) via dbt snapshot
+[4] dbt Run           .venv-dbt    staging (views) → intermediate (view) → marts (tables, full-refresh)
+[5] dbt Test          .venv-dbt    48 data quality tests; circuit breaker on failure
+[6] Excel Export      .venv        4 analytics sheets → styled .xlsx in outputs/
+[7] dbt Docs Gen      .venv-dbt    dbt compile + dbt docs generate → manifest.json + catalog.json
+[8] Lineage Graph     .venv        NetworkX parses manifest → 200 DPI PNG at docs/lineage/
+[9] Profile Report    .venv        Pandas profiles mart tables → interactive HTML at docs/profiling/
 ```
 
 ### Key Design Decisions
@@ -653,6 +692,7 @@ The orchestrator manages the end-to-end pipeline lifecycle as a sequential DAG w
 | **Environment switching** | `_py_exe()` resolves `.venv/Scripts/python.exe` (Win) or `sys.executable` (Linux); `_dbt_exe()` resolves `.venv-dbt/Scripts/dbt.exe` (Win) or `$DBT_EXECUTABLE` env var (Linux/container) |
 | **Circuit breaker** | Non-zero `returncode` → `sys.exit(1)` before next step; exit code 2 = distinct schema drift halt message |
 | **Streaming output** | `subprocess.PIPE` with `locale.getpreferredencoding()` + `errors="replace"` (fixes `UnicodeDecodeError` on Windows with cp1252-encoded output) |
+| **SCD Type 2 snapshot** | `dbt snapshot` reads `stg_customers`, tracks history via `unique_key='email'`, `strategy='timestamp'` on `_execution_date`; adds `dbt_scd_id`, `dbt_valid_from`, `dbt_valid_to` columns |
 | **Step timing** | `time.monotonic()` per step and total pipeline time |
 | **Profile propagation** | `--profile` forwarded to `generate_fake_data.py` |
 | **dbt step splitting** | `dbt run` split into 3 sub-steps (`staging`, `intermediate`, `marts`) with individual failure handling |
@@ -1026,12 +1066,13 @@ make pipeline
 |------|-----------|-------------|-------------|------------|
 | 1 | Generate Data | `.venv` | Faker creates 4 source files in `data/raw/` with referential integrity | Exit code 1 → pipeline halts |
 | 2 | Load to PostgreSQL | `.venv` | Schema drift check → delete_by_execution_date → validation guardrails → PII hash → Parquet serialisation → load → DuckDB harmonise → DLQ isolation | Exit code 1 (general) or 2 (schema drift); DLQ warning sent |
-| 3 | dbt Run | `.venv-dbt` | 3 sub-steps: staging (views) → intermediate (view) → marts (tables, full-refresh) | Exit code 1 → pipeline halts mid-substep |
-| 4 | dbt Test | `.venv-dbt` | 48 data quality tests; `run_results.json` parsed for failure metadata | Critical alert with per-test details → pipeline halts |
-| 5 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | Exit code 1 → pipeline halts |
-| 6 | dbt Docs Generate | `.venv-dbt` | `dbt compile` + `dbt docs generate` → `manifest.json` + `catalog.json` | Exit code 1 → pipeline halts |
-| 7 | Lineage Graph | `.venv` | NetworkX parses `manifest.json` → 200 DPI PNG at `docs/lineage/` | Exit code 1 → pipeline halts |
-| 8 | Data Profile Report | `.venv` | Pandas profiles mart tables → interactive HTML at `docs/profiling/` | Exit code 1 → pipeline halts |
+| 3 | dbt Snapshot | `.venv-dbt` | SCD Type 2 snapshot via `dbt snapshot` — tracks customer attribute history using `unique_key='email'`, `strategy='timestamp'` on `_execution_date` | Exit code 1 → pipeline halts |
+| 4 | dbt Run | `.venv-dbt` | 3 sub-steps: staging (views) → intermediate (view) → marts (tables, full-refresh) | Exit code 1 → pipeline halts mid-substep |
+| 5 | dbt Test | `.venv-dbt` | 48 data quality tests; `run_results.json` parsed for failure metadata | Critical alert with per-test details → pipeline halts |
+| 6 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | Exit code 1 → pipeline halts |
+| 7 | dbt Docs Generate | `.venv-dbt` | `dbt compile` + `dbt docs generate` → `manifest.json` + `catalog.json` | Exit code 1 → pipeline halts |
+| 8 | Lineage Graph | `.venv` | NetworkX parses `manifest.json` → 200 DPI PNG at `docs/lineage/` | Exit code 1 → pipeline halts |
+| 9 | Data Profile Report | `.venv` | Pandas profiles mart tables → interactive HTML at `docs/profiling/` | Exit code 1 → pipeline halts |
 
 ### Validation
 
@@ -1064,4 +1105,4 @@ Once pushed to `main`/`master`, the workflow at `.github/workflows/ci_cd.yml` au
 
 ---
 
-*Architecture document v1.4.0 — Generated for the RetailFlow Pipeline project.*
+*Architecture document v1.5.2 — Generated for the RetailFlow Pipeline project.*

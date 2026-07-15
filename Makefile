@@ -5,7 +5,7 @@
 # Type `make help` to see all available commands.
 # =============================================================================
 
-.PHONY: help setup setup-dbt run stop clean clean-rejected test coverage lint format status export dashboard pipeline docs dbt-run dbt-test sql-analyze generate-data load-data lakehouse
+.PHONY: help setup setup-dbt run stop clean clean-rejected test coverage lint format status export dashboard pipeline docs dbt-run dbt-test dbt-snapshot dbt-deps sql-analyze generate-data load-data lakehouse
 
 help:  # Print available commands with descriptions
 	@echo "RetailFlow Pipeline — Available Commands"
@@ -17,10 +17,12 @@ help:  # Print available commands with descriptions
 	@echo "  make generate-data  Run the fake data generation script"
 	@echo "  make load-data      Load generated CSV data into PostgreSQL raw schema"
 	@echo "  make setup-dbt      Create isolated venv for dbt (avoids mashumaro conflicts)"
+	@echo "  make dbt-deps       Install dbt packages (dbt_utils for SCD Type 2)"
+	@echo "  make dbt-snapshot   Run dbt snapshots (SCD Type 2 history tracking)"
 	@echo "  make dbt-run        Execute all dbt models (staging -> intermediate -> marts)"
 	@echo "  make dbt-test       Run dbt data tests on all models"
-	@echo "  make pipeline       Run full 8-step pipeline end-to-end via orchestrator"
-	@echo "  make test           Run pytest unit tests (155+ tests)"
+	@echo "  make pipeline       Run full 9-step pipeline end-to-end via orchestrator"
+	@echo "  make test           Run pytest unit tests (174+ tests)"
 	@echo "  make coverage       Run pytest with coverage report"
 	@echo "  make status         Run end-to-end pipeline health check (8 dimensions)"
 	@echo "  make lakehouse      Verify Lakehouse Parquet files in data/lakehouse/"
@@ -70,6 +72,16 @@ load-data:  # Load raw CSVs into PostgreSQL raw schema
 	@.venv\Scripts\python scripts\load_to_postgres.py
 	@echo ">> Data loaded into PostgreSQL raw schema."
 
+dbt-deps:  # Install dbt packages (dbt_utils for SCD Type 2)
+	@echo ">> Installing dbt packages..."
+	@cd dbt && ..\.venv-dbt\Scripts\dbt deps
+	@echo ">> dbt packages installed."
+
+dbt-snapshot:  # Run dbt snapshots (SCD Type 2 history tracking)
+	@echo ">> Running dbt snapshots..."
+	@cd dbt && ..\.venv-dbt\Scripts\dbt snapshot
+	@echo ">> dbt snapshots complete."
+
 setup-dbt:  # Create and install the isolated dbt virtual environment
 	@echo ">> Setting up isolated dbt virtual environment..."
 	@if not exist ".venv-dbt" python -m venv .venv-dbt
@@ -110,7 +122,7 @@ export:  # Export analytics to a styled Excel workbook (requires dbt-run first)
 	@echo ">> Exporting analytics to Excel..."
 	@.venv\Scripts\python -m src.exports.excel_exporter
 
-pipeline:  # Run the full pipeline end-to-end via the orchestrator
+pipeline:  # Run the full 9-step pipeline end-to-end via the orchestrator
 	@echo ">> Running full pipeline via orchestrator..."
 	@.venv\Scripts\python scripts\orchestrate.py
 

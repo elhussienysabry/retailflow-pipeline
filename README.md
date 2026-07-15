@@ -1,4 +1,4 @@
-# RetailFlow Pipeline — v1.2.0
+# RetailFlow Pipeline — v1.5.2
 
 [![CI/CD Build Status](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml/badge.svg)](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
@@ -19,6 +19,7 @@
 | 3 | **Dual Virtual Environment Strategy** | `.venv/` (pandas, streamlit, airflow) and `.venv-dbt/` (dbt-core 1.7 + dbt-postgres) resolve the `mashumaro<4` vs `mashumaro>=4` dependency conflict between dbt-core and Airflow/Great Expectations. Orchestrator resolves the correct executable per step via `_py_exe()` / `_dbt_exe()`. | Mirrors production runtime isolation patterns — no single `pip install` can satisfy conflicting transitive dependencies. Common in teams running dbt alongside orchestration tools. |
 | 4 | **CI/CD & DevOps Automation** | GitHub Actions workflow (`.github/workflows/ci_cd.yml`) runs `flake8` linting, `black --check` formatting, full 155+ test `pytest` suite, and `dbt debug` + `dbt parse` SQL compilation against a live PostgreSQL 15 service container on every push/PR. | Catches Python regressions, SQL compilation errors, and broken `ref()` chains before merge. Service container pattern eliminates the need for external test databases. |
 | 5 | **Data Quality Circuit Breaker & Graph Lineage** | 48 automated dbt tests across all models. On failure, orchestrator reads `run_results.json`, dispatches per-test metadata (unique ID, status, execution time, database message) to Discord/Slack. After successful run, `generate_lineage.py` builds a `networkx.DiGraph` from `manifest.json` and renders a colour-coded 200 DPI PNG lineage map. | Goes beyond pass/fail — the alert tells the team *exactly* which SLA was breached. The commitable lineage artifact documents data flow without external tooling. |
+| 6 | **SCD Type 2 — Customer Dimension History** | `dbt snapshot` tracks full attribute history for customers using `unique_key='email'`, `strategy='timestamp'` on `_execution_date`. The `dim_customers` mart reads from the snapshot, adding `customer_key` surrogate PK and SCD columns. `dbt_utils.generate_surrogate_key(['email', 'dbt_valid_from'])` ensures stable keys across runs. | Enables point-in-time analysis (e.g., "what was this customer's country when they placed order X?"), audit trails for GDPR/CCPA compliance, and Slowly Changing Dimension best practices without custom SQL. |
 
 ---
 
@@ -29,7 +30,7 @@
 | **Language** | Python 3.12 | Core pipeline, ingestion, automation |
 | **Warehouse** | PostgreSQL 15 (Docker) | Relational data warehouse |
 | **Lakehouse** | DuckDB 1.5, Apache Parquet, PyArrow | Columnar serialisation, OLAP harmonisation via embedded DuckDB |
-| **Transformation** | dbt-core 1.7, dbt-postgres 1.7 | SQL model compilation, incremental materialisation, data quality tests |
+| **Transformation** | dbt-core 1.7, dbt-postgres 1.7, dbt_utils | SQL model compilation, incremental materialisation, SCD Type 2 snapshots, data quality tests |
 | **Orchestration** | Python CLI orchestrator, Airflow DAG alternative | Sequential DAG execution, circuit breaker, environment switching |
 | **Ingestion** | pandas, SQLAlchemy, Faker | CSV + JSON hybrid ingestion, PII anonymisation, schema drift detection |
 | **Dashboard** | Streamlit, Plotly | Live KPI monitoring with 5-min cached refresh |
@@ -58,7 +59,7 @@ make setup-dbt        # .venv-dbt (dbt-core + dbt-postgres only)
 # Start PostgreSQL
 make run
 
-# Execute the full 8-step pipeline
+# Execute the full 9-step pipeline
 make pipeline
 # OR
 .venv\Scripts\python scripts\orchestrate.py --profile small
@@ -70,12 +71,13 @@ make pipeline
 |------|-----------|-------------|-------------|-------------------|
 | 1 | Generate Data | `.venv` | Faker creates 4 source files (CSV + JSON) in `data/raw/` | ~1.5s |
 | 2 | Load to PostgreSQL | `.venv` | Schema drift check → per-entity validation → PII SHA-256 hash → DLQ isolation → Parquet serialisation (data/lakehouse/) → DELETE + INSERT by execution_date → DuckDB harmonise Parquet → unified insert | ~4s |
-| 3 | dbt Run | `.venv-dbt` | Staging (views) → Intermediate (view) → Marts (tables, full-refresh) | ~20s |
-| 4 | dbt Test | `.venv-dbt` | 48 data quality tests executed; circuit breaker on failure | ~6s |
-| 5 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | ~1.5s |
-| 6 | dbt Docs Generate | `.venv-dbt` | `dbt compile` + `dbt docs generate` → `manifest.json` + `catalog.json` | ~12s |
-| 7 | Lineage Graph Export | `.venv` | NetworkX parses manifest → colour-coded PNG at `docs/lineage/` | ~2.5s |
-| 8 | Data Profile Report | `.venv` | Pandas profiles mart tables → interactive HTML at `docs/profiling/` | ~1.5s |
+| 3 | dbt Snapshot | `.venv-dbt` | SCD Type 2 snapshot—`dbt snapshot` tracks customer attribute history via `unique_key='email'`, `strategy='timestamp'` on `_execution_date` | ~3s |
+| 4 | dbt Run | `.venv-dbt` | Staging (views) → Intermediate (view) → Marts (tables, full-refresh) | ~20s |
+| 5 | dbt Test | `.venv-dbt` | 48 data quality tests executed; circuit breaker on failure | ~6s |
+| 6 | Excel Export | `.venv` | 4 analytics sheets → styled `.xlsx` in `outputs/` | ~1.5s |
+| 7 | dbt Docs Generate | `.venv-dbt` | `dbt compile` + `dbt docs generate` → `manifest.json` + `catalog.json` | ~12s |
+| 8 | Lineage Graph Export | `.venv` | NetworkX parses manifest → colour-coded PNG at `docs/lineage/` | ~2.5s |
+| 9 | Data Profile Report | `.venv` | Pandas profiles mart tables → interactive HTML at `docs/profiling/` | ~1.5s |
 
 ---
 
@@ -144,8 +146,15 @@ make pipeline
                      │              dbt TRANSFORMATION                │
                      │  staging ──► intermediate ──► marts           │
                      │  (views)       (views)        (tables)        │
-                     │  stg_orders    int_orders_    dim_customers    │
-                     │  stg_cust..    enriched       dim_products     │
+                  │  stg_orders    int_orders_    dim_customers    │
+                  │  stg_cust..    enriched       dim_products     │
+                  │                               │                │
+                  │  ┌── SCD TYPE 2 ──────────┐    │                │
+                  │  │ snapshots.scd_customers│    │                │
+                  │  │ (dbt snapshot,         │    │                │
+                  │  │  unique_key='email',   │    │                │
+                  │  │  strategy=timestamp)   │    │                │
+                  │  └────────────────────────┘    │                │
                      │  stg_prod..                   fct_orders       │
                      │                                               │
                      │  ┌── 48 automated data quality tests ────┐    │
@@ -243,6 +252,53 @@ SELECT ...
 {% if is_incremental() %}
   WHERE order_date >= (SELECT MAX(order_date) FROM {{ this }})
 {% endif %}
+```
+
+---
+
+## SCD Type 2 — Customer Dimension History
+
+The pipeline implements **Slowly Changing Dimension Type 2** for customers using `dbt snapshot`:
+
+### Configuration
+
+```sql
+{% snapshot scd_customers %}
+{{
+    config(
+        target_schema='snapshots',
+        unique_key='email',
+        strategy='timestamp',
+        updated_at='_execution_date',
+        invalidate_hard_deletes=True,
+    )
+}}
+SELECT * FROM {{ ref('stg_customers') }}
+{% endsnapshot %}
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| `unique_key='email'` | Email is the stable natural business key (user chose over `customer_id`) |
+| `strategy='timestamp'` | Simpler than `check` strategy; `_execution_date` is the authoritative versioning column |
+| `invalidate_hard_deletes=True` | When a customer disappears from source, marks their last version instead of deleting — full audit trail |
+| Surrogate key | `dbt_utils.generate_surrogate_key(['email', 'dbt_valid_from'])` → stable across re-runs |
+
+### Dimension Table Changes
+
+`dim_customers` was refactored to read from `snapshots.scd_customers` instead of `stg_customers`:
+
+- **New PK:** `customer_key` (surrogate) replaces `customer_id`
+- **New columns:** `dbt_valid_from`, `dbt_valid_to`, `is_current`
+- **Query pattern:** `SELECT ... FROM dim_customers WHERE is_current = TRUE` for the latest view
+
+### Pipeline Integration
+
+```
+Step 3: dbt snapshot   → snapshots.scd_customers
+Step 4: dbt run --marts → marts.dim_customers (reads from scd_customers)
 ```
 
 ---
@@ -372,9 +428,11 @@ retailflow-pipeline/
 │
 ├── dbt/                     # dbt project
 │   ├── models/              # 7 SQL models (staging/intermediate/marts)
+│   ├── snapshots/           # SCD Type 2 snapshot (scd_customers)
 │   ├── tests/               # 2 custom singular tests
 │   ├── macros/              # Jinja SQL macros
 │   ├── profiles.yml         # DB connection (env-var driven)
+│   ├── packages.yml         # dbt packages (dbt-labs/dbt_utils)
 │   └── dbt_project.yml      # dbt project config
 │
 ├── .github/workflows/       # CI/CD — lint, test, dbt parse on every push

@@ -180,6 +180,7 @@ _last_schema_drift_warning: List[Dict[str, Any]] = []
 _PHASE_MAP: Dict[str, str] = {
     "Generate Data": "Ingestion",
     "Load to PostgreSQL": "Ingestion",
+    "dbt Snapshot": "Transformation",
     "dbt Run": "Transformation",
     "dbt Test": "Transformation",
     "Excel Export": "Consumption",
@@ -228,7 +229,10 @@ def _dbt_exe() -> str:
 def _step_box(num: int, total: int, name: str) -> str:
     width = 68
     sep = "-" * width
-    icons = ["[DATA]", "[LOAD]", "[DBT]", "[TEST]", "[EXCEL]", "[DOCS]", "[LINEAGE]", "[PROFILE]"]
+    icons = [
+        "[DATA]", "[LOAD]", "[SNAP]", "[DBT]", "[TEST]",
+        "[EXCEL]", "[DOCS]", "[LINEAGE]", "[PROFILE]",
+    ]
     icon = icons[num - 1] if num <= len(icons) else "[...]"
     return STEP_HEADER.format(
         sep=sep, emoji=icon, num=num, total=total, name=name
@@ -573,8 +577,18 @@ def step_load_to_postgres(execution_date: str = None) -> int:
     return result.returncode
 
 
+def step_dbt_snapshot() -> int:
+    """Step 3: Run dbt snapshots (SCD Type 2 for customers)."""
+    result = _run_command(
+        [_dbt_exe(), "snapshot"],
+        cwd=PROJECT_ROOT / "dbt",
+        label="dbt-snapshot",
+    )
+    return result.returncode
+
+
 def step_dbt_run() -> int:
-    """Step 3: Execute dbt models (staging -> intermediate -> marts)."""
+    """Step 4: Execute dbt models (staging -> intermediate -> marts)."""
     dbt = _dbt_exe()
     dbt_dir = PROJECT_ROOT / "dbt"
 
@@ -656,6 +670,7 @@ def step_generate_profiling() -> int:
 PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("Generate Data", step_generate_data),
     ("Load to PostgreSQL", step_load_to_postgres),
+    ("dbt Snapshot", step_dbt_snapshot),
     ("dbt Run", step_dbt_run),
     ("dbt Test", step_dbt_test),
     ("Excel Export", step_excel_export),

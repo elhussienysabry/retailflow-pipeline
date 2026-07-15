@@ -3,14 +3,23 @@ version: 2
 models:
   - name: dim_customers
     description: >
-      Customer dimension table. One row per customer with demographic
-      details and pre-computed aggregate metrics (total orders, lifetime value).
+      Customer dimension table with SCD Type 2 history. One row per
+      version of each customer, tracked by `customer_key` (surrogate).
+      Use `is_current` (WHERE is_current = TRUE) for the latest view.
 
     columns:
-      - name: customer_id
-        description: Unique customer identifier (UUID). Primary key.
+      - name: customer_key
+        description: >
+          Surrogate key generated from `dbt_utils.generate_surrogate_key(email, dbt_valid_from)`.
+          Stable across pipeline runs. Primary key for the dimension.
         tests:
           - unique
+          - not_null
+
+      - name: customer_id
+        description: Business-level customer identifier (UUID). Not unique in this table
+          (multiple rows per customer across SCD versions).
+        tests:
           - not_null
 
       - name: first_name
@@ -24,9 +33,9 @@ models:
           - not_null
 
       - name: email
-        description: Customer email address.
+        description: Customer email address. Used as the SCD natural key.
+          Not unique in this table (multiple rows per email across SCD versions).
         tests:
-          - unique
           - not_null
 
       - name: country
@@ -43,6 +52,17 @@ models:
 
       - name: gender
         description: Customer gender.
+
+      - name: dbt_valid_from
+        description: Timestamp when this SCD version became active.
+
+      - name: dbt_valid_to
+        description: Timestamp when this SCD version was superseded. NULL for current version.
+
+      - name: is_current
+        description: >
+          Boolean flag. TRUE for the current/latest version of each customer.
+          Use `WHERE is_current` to get the classic 1-row-per-customer view.
 
       - name: total_orders
         description: Total number of orders placed by this customer.
