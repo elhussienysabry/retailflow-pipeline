@@ -97,10 +97,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install dbt
+      - name: Install dbt & psycopg2
         run: |
           python -m pip install --upgrade pip
-          pip install dbt-core==1.7.14 dbt-postgres==1.7.14 dbt-labs/dbt_utils
+          pip install dbt-core==1.7.14 dbt-postgres==1.7.14 psycopg2-binary
 
       - name: Create raw schema
         run: |
