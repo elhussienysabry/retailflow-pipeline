@@ -60,8 +60,14 @@ _TABLE_LABELS: Dict[str, str] = {
 
 # Columns we treat as numeric for stat computation
 _NUMERIC_TYPES = {
-    "INTEGER", "BIGINT", "SMALLINT", "NUMERIC", "DECIMAL",
-    "FLOAT", "DOUBLE PRECISION", "REAL",
+    "INTEGER",
+    "BIGINT",
+    "SMALLINT",
+    "NUMERIC",
+    "DECIMAL",
+    "FLOAT",
+    "DOUBLE PRECISION",
+    "REAL",
 }
 
 # ── Column profile ──────────────────────────────────────────────────────
@@ -140,8 +146,7 @@ def profile_table(
     df = pd.read_sql_table(table, engine, schema=schema)
     insp = inspect(engine)
     col_types = {
-        c["name"]: str(c["type"])
-        for c in insp.get_columns(table, schema=schema)
+        c["name"]: str(c["type"]) for c in insp.get_columns(table, schema=schema)
     }
     row_count = len(df)
     profiles = []
@@ -151,7 +156,10 @@ def profile_table(
         profiles.append(prof)
     logger.info(
         "  %s.%s — %d rows, %d columns profiled",
-        schema, table, row_count, len(profiles),
+        schema,
+        table,
+        row_count,
+        len(profiles),
     )
     return table, profiles, row_count
 
@@ -210,13 +218,13 @@ def _render_html(all_profiles: List[Tuple[str, List[Dict[str, Any]], int]]) -> s
         )
         cards.append(
             f'<div class="card warn"><span class="card-val">'
-            f'{high_card}</span>'
+            f"{high_card}</span>"
             f'<span class="card-label">High-Cardinality</span></div>'
         )
         summary_cards = (
             '<div class="summary-row">\n'
             + "\n".join("          " + c for c in cards)
-            + '\n        </div>'
+            + "\n        </div>"
         )
 
         # ── Per-column rows ───────────────────────────────────────
@@ -242,13 +250,18 @@ def _render_html(all_profiles: List[Tuple[str, List[Dict[str, Any]], int]]) -> s
             if p.get("is_numeric"):
                 rows = []
                 for lbl, key in [
-                    ("Min", "min"), ("Max", "max"), ("Mean", "mean"),
-                    ("Median", "median"), ("Std Dev", "std"),
-                    ("P25", "p25"), ("P75", "p75"), ("Skew", "skew"),
+                    ("Min", "min"),
+                    ("Max", "max"),
+                    ("Mean", "mean"),
+                    ("Median", "median"),
+                    ("Std Dev", "std"),
+                    ("P25", "p25"),
+                    ("P75", "p75"),
+                    ("Skew", "skew"),
                 ]:
                     rows.append(
                         f'<div class="stat"><span class="stat-label">'
-                        f'{lbl}</span>'
+                        f"{lbl}</span>"
                         f'<span class="stat-val">{p[key]}</span></div>'
                     )
                 stats_html = (
@@ -260,15 +273,15 @@ def _render_html(all_profiles: List[Tuple[str, List[Dict[str, Any]], int]]) -> s
                 stats_html = (
                     '<div class="stats-grid compact">\n'
                     f'  <div class="stat"><span class="stat-label">'
-                    f'Top Value</span>'
+                    f"Top Value</span>"
                     f'<span class="stat-val top-val">'
                     f'{p["top_value"]}</span></div>\n'
                     f'  <div class="stat"><span class="stat-label">'
-                    f'Top Freq</span>'
+                    f"Top Freq</span>"
                     f'<span class="stat-val">'
                     f'{p["top_freq"]:,} ({p["top_pct"]}%)'
-                    f'</span></div>\n'
-                    '</div>'
+                    f"</span></div>\n"
+                    "</div>"
                 )
 
             col_rows += f"""
@@ -497,7 +510,9 @@ def main() -> int:
     OUTPUT_PATH.write_text(html, encoding="utf-8")
 
     total_null = sum(p["nulls"] for _, profs, _ in all_profiles for p in profs)
-    high_card = sum(1 for _, profs, _ in all_profiles for p in profs if p["high_cardinality"])
+    high_card = sum(
+        1 for _, profs, _ in all_profiles for p in profs if p["high_cardinality"]
+    )
 
     logger.info(
         "Profile report written to %s "

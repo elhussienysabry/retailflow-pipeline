@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS audit.pipeline_runs (
 def _get_engine() -> Engine:
     """Create a SQLAlchemy engine from environment variables."""
     import os
+
     host = os.getenv("POSTGRES_HOST", "localhost")
     port = os.getenv("POSTGRES_PORT", "5432")
     database = os.getenv("POSTGRES_DB", "retailflow")
@@ -175,18 +176,21 @@ class AuditContext:
                 )
             """)
             with engine.begin() as conn:
-                conn.execute(insert_sql, {
-                    "run_id": self.run_id,
-                    "start_time": self.start_time,
-                    "end_time": self.end_time,
-                    "status": self.status,
-                    "records_ingested": self.records_ingested,
-                    "records_rejected": self.records_rejected,
-                    "parquet_file_path": self.parquet_file_path or None,
-                    "duration_seconds": self.duration_seconds,
-                    "sla_breached": self.sla_breached,
-                    "error_message": self.error_message or None,
-                })
+                conn.execute(
+                    insert_sql,
+                    {
+                        "run_id": self.run_id,
+                        "start_time": self.start_time,
+                        "end_time": self.end_time,
+                        "status": self.status,
+                        "records_ingested": self.records_ingested,
+                        "records_rejected": self.records_rejected,
+                        "parquet_file_path": self.parquet_file_path or None,
+                        "duration_seconds": self.duration_seconds,
+                        "sla_breached": self.sla_breached,
+                        "error_message": self.error_message or None,
+                    },
+                )
 
             logger.info(
                 "Audit record written — run_id=%s status=%s "

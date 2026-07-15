@@ -59,10 +59,12 @@ _ALERTS_AVAILABLE = False
 send_pipeline_alert = None  # type: ignore
 try:
     from scripts.alerts import send_pipeline_alert  # noqa: E402
+
     _ALERTS_AVAILABLE = True
 except ImportError:
     try:
         from alerts import send_pipeline_alert  # noqa: E402, F811
+
         _ALERTS_AVAILABLE = True
     except ImportError:
         pass
@@ -162,9 +164,7 @@ _REJECTED_SCHEMAS_DIR = os.path.join(
 )
 
 # ── Local Data Lakehouse (Parquet) ──────────────────────────────────────
-LAKEHOUSE_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "data", "lakehouse"
-)
+LAKEHOUSE_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "lakehouse")
 PARQUET_COMPRESSION = "snappy"
 
 
@@ -324,9 +324,7 @@ def _move_to_rejected_schemas(filename: str) -> str:
     Returns:
         Destination path of the moved file.
     """
-    src = os.path.join(
-        os.path.dirname(__file__), "..", "data", "raw", filename
-    )
+    src = os.path.join(os.path.dirname(__file__), "..", "data", "raw", filename)
     os.makedirs(_REJECTED_SCHEMAS_DIR, exist_ok=True)
     dest = os.path.join(_REJECTED_SCHEMAS_DIR, filename)
     shutil.move(src, dest)
@@ -337,6 +335,7 @@ def _move_to_rejected_schemas(filename: str) -> str:
 # ---------------------------------------------------------------------------
 # Validation guardrails
 # ---------------------------------------------------------------------------
+
 
 def _validate_customers(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Check customer rows for null keys and malformed emails."""
@@ -360,20 +359,14 @@ def _validate_customers(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     if not rejected.empty:
         rejected["rejection_reason"] = rejected.apply(_reason, axis=1)
-        logger.warning(
-            "Customers guardrail: %d row(s) rejected", len(rejected)
-        )
+        logger.warning("Customers guardrail: %d row(s) rejected", len(rejected))
 
     return clean, rejected
 
 
 def _validate_products(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Check product rows for null keys and negative prices."""
-    mask = (
-        df["product_id"].isna()
-        | df["price_cents"].isna()
-        | (df["price_cents"] < 0)
-    )
+    mask = df["product_id"].isna() | df["price_cents"].isna() | (df["price_cents"] < 0)
     clean = df[~mask].copy()
     rejected = df[mask].copy()
 
@@ -389,9 +382,7 @@ def _validate_products(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     if not rejected.empty:
         rejected["rejection_reason"] = rejected.apply(_reason, axis=1)
-        logger.warning(
-            "Products guardrail: %d row(s) rejected", len(rejected)
-        )
+        logger.warning("Products guardrail: %d row(s) rejected", len(rejected))
 
     return clean, rejected
 
@@ -426,9 +417,7 @@ def _validate_orders(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     if not rejected.empty:
         rejected["rejection_reason"] = rejected.apply(_reason, axis=1)
-        logger.warning(
-            "Orders guardrail: %d row(s) rejected", len(rejected)
-        )
+        logger.warning("Orders guardrail: %d row(s) rejected", len(rejected))
 
     return clean, rejected
 
@@ -457,9 +446,7 @@ def _anonymize_pii(df: pd.DataFrame) -> pd.DataFrame:
             continue
         mask = df[col].notna()
         df.loc[mask, col] = df.loc[mask, col].apply(
-            lambda v: hashlib.sha256(
-                v.strip().lower().encode("utf-8")
-            ).hexdigest()
+            lambda v: hashlib.sha256(v.strip().lower().encode("utf-8")).hexdigest()
         )
     logger.info("PII columns anonymised: %s", ", ".join(_PII_COLUMNS))
     return df
@@ -468,6 +455,7 @@ def _anonymize_pii(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Dead Letter Queue
 # ---------------------------------------------------------------------------
+
 
 def _write_dlq(entity_name: str, rejected_df: pd.DataFrame) -> None:
     """Append rejected rows to a timestamped DLQ CSV file.
@@ -479,15 +467,11 @@ def _write_dlq(entity_name: str, rejected_df: pd.DataFrame) -> None:
     if rejected_df.empty:
         return
 
-    rejected_dir = os.path.join(
-        os.path.dirname(__file__), "..", "data", "rejected"
-    )
+    rejected_dir = os.path.join(os.path.dirname(__file__), "..", "data", "rejected")
     os.makedirs(rejected_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(
-        rejected_dir, f"rejected_{entity_name}s_{timestamp}.csv"
-    )
+    out_path = os.path.join(rejected_dir, f"rejected_{entity_name}s_{timestamp}.csv")
 
     rejected_df.to_csv(out_path, index=False)
     logger.info("DLQ written: %s (%d row(s))", out_path, len(rejected_df))
@@ -518,7 +502,9 @@ def _write_lakehouse_parquet(
         Absolute path to the written ``.parquet`` file.
     """
     if df.empty:
-        logger.warning("Skipping Parquet write for %s — DataFrame is empty.", entity_name)
+        logger.warning(
+            "Skipping Parquet write for %s — DataFrame is empty.", entity_name
+        )
         return ""
 
     partition_path = _hive_partition_path(entity_name, execution_date)
@@ -596,7 +582,9 @@ def _load_json_to_table(
     )
     logger.info(
         "Loaded %d rows into %s (execution_date=%s)",
-        len(df), table_name, execution_date,
+        len(df),
+        table_name,
+        execution_date,
     )
     return len(df)
 
@@ -685,13 +673,19 @@ def _duckdb_harmonize(engine: Engine, execution_date: str) -> int:
     """
     dt = datetime.strptime(execution_date, "%Y-%m-%d")
     orders_glob = os.path.join(
-        LAKEHOUSE_DIR, "orders",
-        f"year={dt.year:04d}", f"month={dt.month:02d}", f"day={dt.day:02d}",
+        LAKEHOUSE_DIR,
+        "orders",
+        f"year={dt.year:04d}",
+        f"month={dt.month:02d}",
+        f"day={dt.day:02d}",
         "*.parquet",
     )
     pos_glob = os.path.join(
-        LAKEHOUSE_DIR, "pos_store_sales",
-        f"year={dt.year:04d}", f"month={dt.month:02d}", f"day={dt.day:02d}",
+        LAKEHOUSE_DIR,
+        "pos_store_sales",
+        f"year={dt.year:04d}",
+        f"month={dt.month:02d}",
+        f"day={dt.day:02d}",
         "*.parquet",
     )
 
@@ -810,6 +804,7 @@ def _validate_and_split(
 # Database helpers (unchanged)
 # ---------------------------------------------------------------------------
 
+
 def get_engine() -> Engine:
     """Create a SQLAlchemy engine from environment variables."""
     host = os.getenv("POSTGRES_HOST", "localhost")
@@ -866,23 +861,20 @@ def delete_by_execution_date(
                 table_name,
             )
             conn.exec_driver_sql(
-                f"ALTER TABLE {table_name} "
-                f"ADD COLUMN _execution_date DATE;"
+                f"ALTER TABLE {table_name} " f"ADD COLUMN _execution_date DATE;"
             )
         conn.commit()
 
         deleted = conn.execute(
-            text(
-                f"DELETE FROM {table_name} "
-                f"WHERE _execution_date = :exec_date"
-            ),
+            text(f"DELETE FROM {table_name} " f"WHERE _execution_date = :exec_date"),
             {"exec_date": execution_date},
         ).rowcount
         conn.commit()
     logger.info(
-        "Idempotent cleanup: deleted %d row(s) from %s "
-        "for execution_date=%s",
-        deleted, table_name, execution_date,
+        "Idempotent cleanup: deleted %d row(s) from %s " "for execution_date=%s",
+        deleted,
+        table_name,
+        execution_date,
     )
 
 
@@ -928,9 +920,7 @@ def load_csv_to_table(
     clean_chunks: List[pd.DataFrame] = []
 
     for chunk in pd.read_csv(filepath, dtype=DTYPE_MAP, chunksize=chunk_size):
-        clean_chunk, rejected_chunk = _validate_and_split(
-            csv_filename, chunk
-        )
+        clean_chunk, rejected_chunk = _validate_and_split(csv_filename, chunk)
 
         if not clean_chunk.empty:
             # Tag every row with the current execution date for idempotency.
@@ -962,14 +952,14 @@ def load_csv_to_table(
         _write_lakehouse_parquet(lakehouse_df, parquet_entity, execution_date)
 
     logger.info(
-        "Loaded %d rows into %s, rejected %d to DLQ "
-        "(execution_date=%s)",
+        "Loaded %d rows into %s, rejected %d to DLQ " "(execution_date=%s)",
         total_loaded,
         table_name,
         total_rejected,
         execution_date,
     )
     return total_loaded, total_rejected
+
 
 # ---------------------------------------------------------------------------
 # Lakehouse partition cleanup helpers
@@ -1039,10 +1029,10 @@ def main() -> None:
     )
 
     # ── Generate the idempotency execution date once per run ──────────
-    execution_date = args.execution_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    logger.info(
-        "Idempotent run — execution_date=%s", execution_date
+    execution_date = args.execution_date or datetime.now(timezone.utc).strftime(
+        "%Y-%m-%d"
     )
+    logger.info("Idempotent run — execution_date=%s", execution_date)
 
     start_time = datetime.now()
 
@@ -1056,9 +1046,7 @@ def main() -> None:
 
         for filename, table_name, file_type in SOURCE_MAP:
             # ── Schema Drift Detection ──────────────────────────
-            entity_name = (
-                filename.replace(".csv", "").replace(".json", "")
-            )
+            entity_name = filename.replace(".csv", "").replace(".json", "")
             filepath = os.path.join(
                 os.path.dirname(__file__), "..", "data", "raw", filename
             )
@@ -1070,8 +1058,7 @@ def main() -> None:
                 _move_to_rejected_schemas(filename)
                 print(f"SCHEMA_DRIFT_CRITICAL:{json.dumps(drift_details)}")
                 logger.critical(
-                    "Schema drift — critical. Pipeline halted "
-                    "for %s.", filename
+                    "Schema drift — critical. Pipeline halted " "for %s.", filename
                 )
                 if _ALERTS_AVAILABLE and send_pipeline_alert:
                     alert_details: Dict[str, Any] = {

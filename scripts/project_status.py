@@ -104,9 +104,7 @@ def check_postgres() -> Tuple[str, str]:
         user = os.getenv("POSTGRES_USER", "retailflow_user")
         password = os.getenv("POSTGRES_PASSWORD", "retailflow_pass")
 
-        conn_str = (
-            f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
-        )
+        conn_str = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
         engine = create_engine(conn_str, connect_args={"connect_timeout": 5})
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -203,13 +201,11 @@ def check_dbt_venv() -> Tuple[str, str]:
     if DBT_VENV_DIR.exists():
         return (
             "WARNING",
-            "dbt venv exists but dbt executable not found — "
-            "run 'make setup-dbt'",
+            "dbt venv exists but dbt executable not found — " "run 'make setup-dbt'",
         )
     return (
         "WARNING",
-        "dbt virtual environment (.venv-dbt) not found — "
-        "run 'make setup-dbt'",
+        "dbt virtual environment (.venv-dbt) not found — " "run 'make setup-dbt'",
     )
 
 
@@ -248,18 +244,14 @@ def check_database_rows() -> Tuple[str, str]:
         user = os.getenv("POSTGRES_USER", "retailflow_user")
         password = os.getenv("POSTGRES_PASSWORD", "retailflow_pass")
 
-        conn_str = (
-            f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
-        )
+        conn_str = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
         engine = create_engine(conn_str, connect_args={"connect_timeout": 5})
 
         empty_tables: List[str] = []
         with engine.connect() as conn:
             for table in REQUIRED_TABLES:
                 try:
-                    count = conn.execute(
-                        text(f"SELECT COUNT(*) FROM {table}")
-                    ).scalar()
+                    count = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
                     if count == 0:
                         empty_tables.append(table)
                 except Exception:
@@ -312,12 +304,18 @@ def _print_report(checks: List[Tuple[str, Tuple[str, str]]]) -> None:
         logger.info("All checks passed — pipeline is healthy.")
     elif overall == "WARNING":
         print("Overall Status: Degraded")
-        logger.warning("Some checks have warnings — pipeline may be partially operational.")
+        logger.warning(
+            "Some checks have warnings — pipeline may be partially operational."
+        )
     else:
         print("Overall Status: Unhealthy")
-        logger.error("One or more critical checks failed — pipeline is not operational.")
+        logger.error(
+            "One or more critical checks failed — pipeline is not operational."
+        )
 
-    failed = [(name, status) for name, (status, _) in checks if status in ("FAIL", "WARNING")]
+    failed = [
+        (name, status) for name, (status, _) in checks if status in ("FAIL", "WARNING")
+    ]
     if failed:
         _print_fix_hints(failed)
 
@@ -343,12 +341,8 @@ def _print_fix_hints(failed: List[Tuple[str, str]]) -> None:
             "  Windows:  copy .env.example .env\n"
             "  Git Bash: cp .env.example .env"
         ),
-        "Raw CSV Files": (
-            "Run: .venv\\Scripts\\python scripts\\generate_fake_data.py"
-        ),
-        "dbt Environment": (
-            "Create the isolated dbt environment: 'make setup-dbt'."
-        ),
+        "Raw CSV Files": ("Run: .venv\\Scripts\\python scripts\\generate_fake_data.py"),
+        "dbt Environment": ("Create the isolated dbt environment: 'make setup-dbt'."),
         "Schema Drift": (
             "Review files in data/rejected_schemas/. A source file has a "
             "different schema than expected by the blueprint in "

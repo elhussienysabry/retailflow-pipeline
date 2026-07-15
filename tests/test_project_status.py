@@ -62,9 +62,7 @@ class TestCheckPostgres:
     def test_container_running_and_reachable(
         self, mock_create_engine: MagicMock, mock_run_cmd: MagicMock
     ) -> None:
-        mock_run_cmd.return_value = MagicMock(
-            stdout="retailflow-db\n", returncode=0
-        )
+        mock_run_cmd.return_value = MagicMock(stdout="retailflow-db\n", returncode=0)
         mock_conn = MagicMock()
         mock_engine = MagicMock()
         mock_engine.connect.return_value.__enter__.return_value = mock_conn
@@ -86,9 +84,7 @@ class TestCheckPostgres:
     def test_container_running_but_not_reachable(
         self, mock_create_engine: MagicMock, mock_run_cmd: MagicMock
     ) -> None:
-        mock_run_cmd.return_value = MagicMock(
-            stdout="retailflow-db\n", returncode=0
-        )
+        mock_run_cmd.return_value = MagicMock(stdout="retailflow-db\n", returncode=0)
         mock_create_engine.side_effect = Exception("Connection refused")
 
         status, msg = check_postgres()
@@ -103,9 +99,9 @@ class TestCheckEnvFile:
         with tempfile.TemporaryDirectory() as tmpdir:
             env_file = Path(tmpdir) / ".env"
             env_file.write_text("TEST_VAR=hello\n")
-            with patch(
-                "scripts.project_status.ENV_FILE", env_file
-            ), patch("scripts.project_status.load_dotenv", return_value=True):
+            with patch("scripts.project_status.ENV_FILE", env_file), patch(
+                "scripts.project_status.load_dotenv", return_value=True
+            ):
                 status, msg = check_env_file()
                 assert status == "OK"
                 assert "loaded" in msg.lower()

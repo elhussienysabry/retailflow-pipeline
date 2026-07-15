@@ -160,7 +160,9 @@ class TestDetectSchemaDrift:
         with tempfile.TemporaryDirectory() as tmpdir:
             csv_path = Path(tmpdir) / "customers.csv"
             # Use quoted strings so pandas reads string dtypes, not int64.
-            csv_path.write_text('customer_id,first_name,last_name,email,country,city,signup_date,age,gender\n"c1","John","Doe","j@example.com","US","NY","2024-01-01","30","M"\n')
+            csv_path.write_text(
+                'customer_id,first_name,last_name,email,country,city,signup_date,age,gender\n"c1","John","Doe","j@example.com","US","NY","2024-01-01","30","M"\n'
+            )
             drift, details = _detect_schema_drift(str(csv_path), "customers", "csv")
             assert drift == "none"
             assert details == {}
@@ -179,7 +181,9 @@ class TestDetectSchemaDrift:
             csv_path = Path(tmpdir) / "orders.csv"
             # Quote string columns to avoid int64 dtype inference.
             cols = "order_id,customer_id,product_id,quantity,order_date,status,discount_pct,shipping_days,extra_col\n"
-            csv_path.write_text(cols + '"o1","c1","p1",1,"2024-01-01","pending",0,1,"extra"\n')
+            csv_path.write_text(
+                cols + '"o1","c1","p1",1,"2024-01-01","pending",0,1,"extra"\n'
+            )
             drift, details = _detect_schema_drift(str(csv_path), "orders", "csv")
             assert drift == "warning"
             assert "extra_columns" in details
@@ -196,7 +200,9 @@ class TestDetectSchemaDrift:
         with tempfile.TemporaryDirectory() as tmpdir:
             json_path = Path(tmpdir) / "empty.json"
             json_path.write_text("[]")
-            drift, details = _detect_schema_drift(str(json_path), "pos_store_sales", "json")
+            drift, details = _detect_schema_drift(
+                str(json_path), "pos_store_sales", "json"
+            )
             assert drift == "critical"
             assert "missing_columns" in details
 
@@ -204,7 +210,9 @@ class TestDetectSchemaDrift:
         with tempfile.TemporaryDirectory() as tmpdir:
             json_path = Path(tmpdir) / "pos_store_sales.json"
             json_path.write_text('[{"sale_id": "1"}]')
-            drift, details = _detect_schema_drift(str(json_path), "pos_store_sales", "json")
+            drift, details = _detect_schema_drift(
+                str(json_path), "pos_store_sales", "json"
+            )
             assert drift == "critical"
 
     def test_unknown_file_type_returns_none(self) -> None:
@@ -241,39 +249,47 @@ class TestMoveToRejectedSchemas:
 
 class TestValidateCustomers:
     def test_clean_rows_pass(self) -> None:
-        df = pd.DataFrame({
-            "customer_id": ["1", "2"],
-            "email": ["a@b.com", "c@d.com"],
-        })
+        df = pd.DataFrame(
+            {
+                "customer_id": ["1", "2"],
+                "email": ["a@b.com", "c@d.com"],
+            }
+        )
         clean, rejected = _validate_customers(df)
         assert len(clean) == 2
         assert len(rejected) == 0
 
     def test_missing_customer_id_rejected(self) -> None:
-        df = pd.DataFrame({
-            "customer_id": [None, "2"],
-            "email": ["a@b.com", "c@d.com"],
-        })
+        df = pd.DataFrame(
+            {
+                "customer_id": [None, "2"],
+                "email": ["a@b.com", "c@d.com"],
+            }
+        )
         clean, rejected = _validate_customers(df)
         assert len(clean) == 1
         assert len(rejected) == 1
         assert "missing customer_id" in rejected["rejection_reason"].iloc[0]
 
     def test_missing_email_rejected(self) -> None:
-        df = pd.DataFrame({
-            "customer_id": ["1", "2"],
-            "email": [None, "c@d.com"],
-        })
+        df = pd.DataFrame(
+            {
+                "customer_id": ["1", "2"],
+                "email": [None, "c@d.com"],
+            }
+        )
         clean, rejected = _validate_customers(df)
         assert len(clean) == 1
         assert len(rejected) == 1
         assert "missing email" in rejected["rejection_reason"].iloc[0]
 
     def test_malformed_email_rejected(self) -> None:
-        df = pd.DataFrame({
-            "customer_id": ["1"],
-            "email": ["notanemail"],
-        })
+        df = pd.DataFrame(
+            {
+                "customer_id": ["1"],
+                "email": ["notanemail"],
+            }
+        )
         clean, rejected = _validate_customers(df)
         assert len(rejected) == 1
         assert "malformed email" in rejected["rejection_reason"].iloc[0]
@@ -281,19 +297,23 @@ class TestValidateCustomers:
 
 class TestValidateProducts:
     def test_clean_rows_pass(self) -> None:
-        df = pd.DataFrame({
-            "product_id": ["1", "2"],
-            "price_cents": [1000, 2000],
-        })
+        df = pd.DataFrame(
+            {
+                "product_id": ["1", "2"],
+                "price_cents": [1000, 2000],
+            }
+        )
         clean, rejected = _validate_products(df)
         assert len(clean) == 2
         assert len(rejected) == 0
 
     def test_negative_price_rejected(self) -> None:
-        df = pd.DataFrame({
-            "product_id": ["1"],
-            "price_cents": [-100],
-        })
+        df = pd.DataFrame(
+            {
+                "product_id": ["1"],
+                "price_cents": [-100],
+            }
+        )
         clean, rejected = _validate_products(df)
         assert len(rejected) == 1
         assert "negative" in rejected["rejection_reason"].iloc[0]
@@ -301,28 +321,43 @@ class TestValidateProducts:
 
 class TestValidateOrders:
     def test_clean_rows_pass(self) -> None:
-        df = pd.DataFrame({
-            "order_id": ["1"], "customer_id": ["1"], "product_id": ["1"],
-            "quantity": [1], "discount_pct": [10],
-        })
+        df = pd.DataFrame(
+            {
+                "order_id": ["1"],
+                "customer_id": ["1"],
+                "product_id": ["1"],
+                "quantity": [1],
+                "discount_pct": [10],
+            }
+        )
         clean, rejected = _validate_orders(df)
         assert len(clean) == 1
         assert len(rejected) == 0
 
     def test_negative_quantity_rejected(self) -> None:
-        df = pd.DataFrame({
-            "order_id": ["1"], "customer_id": ["1"], "product_id": ["1"],
-            "quantity": [-1], "discount_pct": [0],
-        })
+        df = pd.DataFrame(
+            {
+                "order_id": ["1"],
+                "customer_id": ["1"],
+                "product_id": ["1"],
+                "quantity": [-1],
+                "discount_pct": [0],
+            }
+        )
         clean, rejected = _validate_orders(df)
         assert len(rejected) == 1
         assert "negative quantity" in rejected["rejection_reason"].iloc[0]
 
     def test_discount_out_of_range_rejected(self) -> None:
-        df = pd.DataFrame({
-            "order_id": ["1"], "customer_id": ["1"], "product_id": ["1"],
-            "quantity": [1], "discount_pct": [150],
-        })
+        df = pd.DataFrame(
+            {
+                "order_id": ["1"],
+                "customer_id": ["1"],
+                "product_id": ["1"],
+                "quantity": [1],
+                "discount_pct": [150],
+            }
+        )
         clean, rejected = _validate_orders(df)
         assert len(rejected) == 1
         assert "discount_pct out of range" in rejected["rejection_reason"].iloc[0]
@@ -330,11 +365,13 @@ class TestValidateOrders:
 
 class TestAnonymizePii:
     def test_hashes_name_and_email(self) -> None:
-        df = pd.DataFrame({
-            "first_name": ["John"],
-            "last_name": ["Doe"],
-            "email": ["John.Doe@Example.COM"],
-        })
+        df = pd.DataFrame(
+            {
+                "first_name": ["John"],
+                "last_name": ["Doe"],
+                "email": ["John.Doe@Example.COM"],
+            }
+        )
         result = _anonymize_pii(df)
         # All values should be 64-char hex strings (SHA-256).
         assert result["first_name"].iloc[0] != "John"
@@ -342,11 +379,13 @@ class TestAnonymizePii:
         assert result["email"].iloc[0] != "John.Doe@Example.COM"
 
     def test_preserves_nulls(self) -> None:
-        df = pd.DataFrame({
-            "first_name": [None],
-            "last_name": ["Smith"],
-            "email": ["a@b.com"],
-        })
+        df = pd.DataFrame(
+            {
+                "first_name": [None],
+                "last_name": ["Smith"],
+                "email": ["a@b.com"],
+            }
+        )
         result = _anonymize_pii(df)
         assert result["first_name"].iloc[0] is None
 
@@ -358,27 +397,36 @@ class TestAnonymizePii:
 
 class TestValidateAndSplit:
     def test_routes_to_customers_validator(self) -> None:
-        df = pd.DataFrame({
-            "customer_id": ["1", None],
-            "email": ["a@b.com", "b@c.com"],
-        })
+        df = pd.DataFrame(
+            {
+                "customer_id": ["1", None],
+                "email": ["a@b.com", "b@c.com"],
+            }
+        )
         clean, rejected = _validate_and_split("customers.csv", df)
         assert len(clean) == 1
         assert len(rejected) == 1
 
     def test_routes_to_products_validator(self) -> None:
-        df = pd.DataFrame({
-            "product_id": ["1"],
-            "price_cents": [-1],
-        })
+        df = pd.DataFrame(
+            {
+                "product_id": ["1"],
+                "price_cents": [-1],
+            }
+        )
         clean, rejected = _validate_and_split("products.csv", df)
         assert len(rejected) == 1
 
     def test_routes_to_orders_validator(self) -> None:
-        df = pd.DataFrame({
-            "order_id": ["1"], "customer_id": ["1"], "product_id": ["1"],
-            "quantity": [1], "discount_pct": [150],
-        })
+        df = pd.DataFrame(
+            {
+                "order_id": ["1"],
+                "customer_id": ["1"],
+                "product_id": ["1"],
+                "quantity": [1],
+                "discount_pct": [150],
+            }
+        )
         clean, rejected = _validate_and_split("orders.csv", df)
         assert len(rejected) == 1
 
@@ -400,11 +448,13 @@ class TestWriteDlq:
                 "scripts.load_to_postgres.os.path.dirname",
                 return_value=str(Path(tmpdir) / "scripts"),
             ):
-                df = pd.DataFrame({
-                    "customer_id": [None],
-                    "email": ["a@b.com"],
-                    "rejection_reason": ["missing customer_id"],
-                })
+                df = pd.DataFrame(
+                    {
+                        "customer_id": [None],
+                        "email": ["a@b.com"],
+                        "rejection_reason": ["missing customer_id"],
+                    }
+                )
                 _write_dlq("customer", df)
                 rejected_dir = Path(tmpdir) / "data" / "rejected"
                 csv_files = list(rejected_dir.glob("rejected_customers_*.csv"))
@@ -423,8 +473,11 @@ class TestHivePartitionPath:
         ):
             path = _hive_partition_path("customers", "2026-07-14")
             expected = os.path.join(
-                "/base/lakehouse", "customers",
-                "year=2026", "month=07", "day=14",
+                "/base/lakehouse",
+                "customers",
+                "year=2026",
+                "month=07",
+                "day=14",
             )
             assert path == expected
 
@@ -523,18 +576,21 @@ class TestDuckdbHarmonize:
                 lakehouse / "orders" / "year=2026" / "month=07" / "day=13"
             )
             orders_partition.mkdir(parents=True)
-            orders_df = pd.DataFrame({
-                "order_id": ["o1", "o2"],
-                "product_id": ["p1", "p2"],
-                "quantity": [2, 1],
-                "order_date": ["2026-01-01", "2026-01-02"],
-                "customer_id": ["c1", "c2"],
-                "status": ["completed", "pending"],
-                "discount_pct": [0, 10],
-                "shipping_days": [3, 5],
-            })
+            orders_df = pd.DataFrame(
+                {
+                    "order_id": ["o1", "o2"],
+                    "product_id": ["p1", "p2"],
+                    "quantity": [2, 1],
+                    "order_date": ["2026-01-01", "2026-01-02"],
+                    "customer_id": ["c1", "c2"],
+                    "status": ["completed", "pending"],
+                    "discount_pct": [0, 10],
+                    "shipping_days": [3, 5],
+                }
+            )
             orders_df.to_parquet(
-                str(orders_partition / "orders.parquet"), index=False,
+                str(orders_partition / "orders.parquet"),
+                index=False,
             )
 
             # Write a minimal pos_store_sales.parquet in Hive-partitioned structure.
@@ -542,18 +598,21 @@ class TestDuckdbHarmonize:
                 lakehouse / "pos_store_sales" / "year=2026" / "month=07" / "day=13"
             )
             pos_partition.mkdir(parents=True)
-            pos_df = pd.DataFrame({
-                "sale_id": ["s1"],
-                "store_id": ["STORE_001"],
-                "product_id": ["p3"],
-                "quantity": [5],
-                "unit_price_cents": [1999],
-                "total_amount": [9995],
-                "transaction_timestamp": ["2026-01-03T10:00:00"],
-                "payment_method": ["credit_card"],
-            })
+            pos_df = pd.DataFrame(
+                {
+                    "sale_id": ["s1"],
+                    "store_id": ["STORE_001"],
+                    "product_id": ["p3"],
+                    "quantity": [5],
+                    "unit_price_cents": [1999],
+                    "total_amount": [9995],
+                    "transaction_timestamp": ["2026-01-03T10:00:00"],
+                    "payment_method": ["credit_card"],
+                }
+            )
             pos_df.to_parquet(
-                str(pos_partition / "pos_store_sales.parquet"), index=False,
+                str(pos_partition / "pos_store_sales.parquet"),
+                index=False,
             )
 
             mock_conn = MagicMock()
@@ -580,18 +639,21 @@ class TestDuckdbHarmonize:
                 lakehouse / "orders" / "year=2026" / "month=07" / "day=13"
             )
             orders_partition.mkdir(parents=True)
-            orders_df = pd.DataFrame({
-                "order_id": ["o1"],
-                "product_id": ["p1"],
-                "quantity": [1],
-                "order_date": ["2026-01-01"],
-                "customer_id": ["c1"],
-                "status": ["completed"],
-                "discount_pct": [0],
-                "shipping_days": [2],
-            })
+            orders_df = pd.DataFrame(
+                {
+                    "order_id": ["o1"],
+                    "product_id": ["p1"],
+                    "quantity": [1],
+                    "order_date": ["2026-01-01"],
+                    "customer_id": ["c1"],
+                    "status": ["completed"],
+                    "discount_pct": [0],
+                    "shipping_days": [2],
+                }
+            )
             orders_df.to_parquet(
-                str(orders_partition / "orders.parquet"), index=False,
+                str(orders_partition / "orders.parquet"),
+                index=False,
             )
 
             mock_conn = MagicMock()

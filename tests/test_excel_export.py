@@ -98,8 +98,12 @@ class TestBuildWorkbook:
         ws = wb["Top Customers"]
         headers = [ws.cell(row=1, column=i).value for i in range(1, 7)]
         assert headers == [
-            "first_name", "last_name", "email",
-            "country", "city", "total_net_revenue",
+            "first_name",
+            "last_name",
+            "email",
+            "country",
+            "city",
+            "total_net_revenue",
         ]
 
     def test_monthly_sales_headers(self) -> None:
@@ -109,7 +113,9 @@ class TestBuildWorkbook:
         ws = wb["Monthly Sales"]
         headers = [ws.cell(row=1, column=i).value for i in range(1, 5)]
         assert headers == [
-            "month", "total_orders", "net_revenue",
+            "month",
+            "total_orders",
+            "net_revenue",
             "month_over_month_growth_pct",
         ]
 
@@ -120,8 +126,12 @@ class TestBuildWorkbook:
         ws = wb["Category Performance"]
         headers = [ws.cell(row=1, column=i).value for i in range(1, 7)]
         assert headers == [
-            "category", "total_orders", "total_units_sold",
-            "total_net_revenue", "avg_discount_pct", "revenue_share_pct",
+            "category",
+            "total_orders",
+            "total_units_sold",
+            "total_net_revenue",
+            "avg_discount_pct",
+            "revenue_share_pct",
         ]
 
     def test_cohort_analysis_headers(self) -> None:
@@ -131,8 +141,11 @@ class TestBuildWorkbook:
         ws = wb["Cohort Analysis"]
         headers = [ws.cell(row=1, column=i).value for i in range(1, 6)]
         assert headers == [
-            "cohort_month", "cohort_index", "active_customers",
-            "total_revenue", "avg_revenue_per_customer",
+            "cohort_month",
+            "cohort_index",
+            "active_customers",
+            "total_revenue",
+            "avg_revenue_per_customer",
         ]
 
     def test_empty_dataframe_placeholder(self) -> None:
@@ -247,9 +260,7 @@ class TestFetchData:
     """Tests for the fetch_data function."""
 
     @patch("src.exports.excel_exporter.pd.read_sql")
-    def test_returns_dataframes_for_each_query(
-        self, mock_read_sql: MagicMock
-    ) -> None:
+    def test_returns_dataframes_for_each_query(self, mock_read_sql: MagicMock) -> None:
         mock_engine = MagicMock()
         mock_read_sql.return_value = pd.DataFrame({"col": [1]})
 
@@ -259,9 +270,7 @@ class TestFetchData:
             assert sheet_name in data
 
     @patch("src.exports.excel_exporter.pd.read_sql", side_effect=Exception("DB error"))
-    def test_query_failure_returns_empty_df(
-        self, mock_read_sql: MagicMock
-    ) -> None:
+    def test_query_failure_returns_empty_df(self, mock_read_sql: MagicMock) -> None:
         mock_engine = MagicMock()
         data = fetch_data(mock_engine)
         for sheet_name, df in data.items():

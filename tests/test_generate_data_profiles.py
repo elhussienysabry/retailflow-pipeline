@@ -111,9 +111,12 @@ class TestParseArgsProfiles:
             "sys.argv",
             [
                 "generate_fake_data.py",
-                "--profile", "medium",
-                "--customers", "999",
-                "--orders", "888",
+                "--profile",
+                "medium",
+                "--customers",
+                "999",
+                "--orders",
+                "888",
             ],
         ):
             args = parse_args()

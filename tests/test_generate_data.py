@@ -31,14 +31,18 @@ class TestGenerateCustomers:
 
     def test_creates_csv_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 filepath = generate_customers(100)
                 assert os.path.exists(filepath)
                 assert filepath.endswith("customers.csv")
 
     def test_correct_number_of_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 filepath = generate_customers(50)
                 with open(filepath, "r") as f:
                     reader = csv.DictReader(f)
@@ -47,20 +51,31 @@ class TestGenerateCustomers:
 
     def test_expected_columns(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 filepath = generate_customers(10)
                 with open(filepath, "r") as f:
                     reader = csv.DictReader(f)
                     columns = reader.fieldnames
                 expected = [
-                    "customer_id", "first_name", "last_name", "email",
-                    "country", "city", "signup_date", "age", "gender",
+                    "customer_id",
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "country",
+                    "city",
+                    "signup_date",
+                    "age",
+                    "gender",
                 ]
                 assert sorted(columns) == sorted(expected)
 
     def test_age_is_integer(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 filepath = generate_customers(100)
                 with open(filepath, "r") as f:
                     reader = csv.DictReader(f)
@@ -74,14 +89,18 @@ class TestGenerateProducts:
 
     def test_creates_csv_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 filepath = generate_products(50)
                 assert os.path.exists(filepath)
                 assert filepath.endswith("products.csv")
 
     def test_correct_number_of_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 filepath = generate_products(30)
                 with open(filepath, "r") as f:
                     reader = csv.DictReader(f)
@@ -90,7 +109,9 @@ class TestGenerateProducts:
 
     def test_valid_categories(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 filepath = generate_products(50)
                 valid_categories = {"Electronics", "Clothing", "Food", "Home"}
                 with open(filepath, "r") as f:
@@ -100,7 +121,9 @@ class TestGenerateProducts:
 
     def test_positive_price_cents(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 filepath = generate_products(50)
                 with open(filepath, "r") as f:
                     reader = csv.DictReader(f)
@@ -113,7 +136,9 @@ class TestGenerateOrders:
     def test_creates_csv_file(self) -> None:
         """The function should create an orders.csv file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 customer_ids = ["c1", "c2", "c3"]
                 product_ids = ["p1", "p2"]
                 filepath = generate_orders(50, customer_ids, product_ids)
@@ -122,7 +147,9 @@ class TestGenerateOrders:
 
     def test_correct_number_of_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 customer_ids = ["c1", "c2", "c3"]
                 product_ids = ["p1", "p2"]
                 filepath = generate_orders(25, customer_ids, product_ids)
@@ -133,7 +160,9 @@ class TestGenerateOrders:
 
     def test_references_existing_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 customer_ids = ["c1", "c2", "c3"]
                 product_ids = ["p1", "p2"]
                 filepath = generate_orders(50, customer_ids, product_ids)
@@ -145,7 +174,9 @@ class TestGenerateOrders:
 
     def test_valid_statuses(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir):
+            with patch(
+                "scripts.generate_fake_data.ensure_output_dir", return_value=tmpdir
+            ):
                 customer_ids = ["c1", "c2", "c3"]
                 product_ids = ["p1", "p2"]
                 filepath = generate_orders(50, customer_ids, product_ids)

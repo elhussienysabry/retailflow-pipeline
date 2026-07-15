@@ -84,9 +84,7 @@ def _run_preflight_checks() -> None:
             missing.append(rel)
 
     if missing:
-        msg = (
-            "The following required directories are missing:\n"
-        )
+        msg = "The following required directories are missing:\n"
         for d in missing:
             msg += f"    - {d}/\n"
         msg += (
@@ -158,10 +156,12 @@ send_pipeline_alert = None  # type: ignore
 send_dbt_test_alert = None  # type: ignore
 try:
     from scripts.alerts import send_pipeline_alert, send_dbt_test_alert  # noqa: E402
+
     _ALERTS_AVAILABLE = True
 except ImportError:
     try:
         from alerts import send_pipeline_alert, send_dbt_test_alert  # noqa: E402, F811
+
         _ALERTS_AVAILABLE = True
     except ImportError:
         pass
@@ -230,18 +230,21 @@ def _step_box(num: int, total: int, name: str) -> str:
     width = 68
     sep = "-" * width
     icons = [
-        "[DATA]", "[LOAD]", "[SNAP]", "[DBT]", "[TEST]",
-        "[EXCEL]", "[DOCS]", "[LINEAGE]", "[PROFILE]",
+        "[DATA]",
+        "[LOAD]",
+        "[SNAP]",
+        "[DBT]",
+        "[TEST]",
+        "[EXCEL]",
+        "[DOCS]",
+        "[LINEAGE]",
+        "[PROFILE]",
     ]
     icon = icons[num - 1] if num <= len(icons) else "[...]"
-    return STEP_HEADER.format(
-        sep=sep, emoji=icon, num=num, total=total, name=name
-    )
+    return STEP_HEADER.format(sep=sep, emoji=icon, num=num, total=total, name=name)
 
 
-def _run_command(
-    cmd: List[str], cwd: Path = None, label: str = ""
-) -> CommandResult:
+def _run_command(cmd: List[str], cwd: Path = None, label: str = "") -> CommandResult:
     """Execute a subprocess, stream output in real time, and capture lines.
 
     Args:
@@ -290,7 +293,7 @@ def _parse_dlq_data(output_lines: List[str]) -> Dict[str, Any]:
     for line in output_lines:
         if line.startswith("DLQ_SUMMARY:"):
             try:
-                return json.loads(line[len("DLQ_SUMMARY:"):])
+                return json.loads(line[len("DLQ_SUMMARY:") :])
             except (json.JSONDecodeError, KeyError):
                 logger.warning("Could not parse DLQ summary: %s", line)
             break
@@ -310,8 +313,7 @@ def _log_dlq_summary(output_lines: List[str]) -> None:
     rejected = data.get("rejected", 0)
 
     logger.info(
-        "DLQ Ingestion Summary — loaded=%d clean, "
-        "rejected=%d to Dead Letter Queue",
+        "DLQ Ingestion Summary — loaded=%d clean, " "rejected=%d to Dead Letter Queue",
         loaded,
         rejected,
     )
@@ -346,22 +348,14 @@ def _parse_schema_drift_data(
     for line in output_lines:
         if line.startswith("SCHEMA_DRIFT_CRITICAL:"):
             try:
-                critical.append(
-                    json.loads(line[len("SCHEMA_DRIFT_CRITICAL:"):])
-                )
+                critical.append(json.loads(line[len("SCHEMA_DRIFT_CRITICAL:") :]))
             except (json.JSONDecodeError, KeyError):
-                logger.warning(
-                    "Could not parse SCHEMA_DRIFT_CRITICAL: %s", line
-                )
+                logger.warning("Could not parse SCHEMA_DRIFT_CRITICAL: %s", line)
         elif line.startswith("SCHEMA_DRIFT_WARNING:"):
             try:
-                warning.append(
-                    json.loads(line[len("SCHEMA_DRIFT_WARNING:"):])
-                )
+                warning.append(json.loads(line[len("SCHEMA_DRIFT_WARNING:") :]))
             except (json.JSONDecodeError, KeyError):
-                logger.warning(
-                    "Could not parse SCHEMA_DRIFT_WARNING: %s", line
-                )
+                logger.warning("Could not parse SCHEMA_DRIFT_WARNING: %s", line)
 
     return critical, warning
 
@@ -477,7 +471,7 @@ def _send_step_failure_alert(step_name: str, rc: int) -> None:
             stage="dbt-test",
             details={
                 "Error": (
-                    "\U0001F4A5 Pipeline Broken: "
+                    "\U0001f4a5 Pipeline Broken: "
                     "dbt Data Quality Tests Failed at Stage: dbt Test"
                 ),
                 "Exit Code": rc,
@@ -519,7 +513,9 @@ def _send_success_alert(
     }
 
     if sla_breached:
-        details["SLA Status"] = f"\u26A0\uFE0F BREACHED ({total_elapsed:.2f}s > {sla_seconds:.0f}s)"
+        details["SLA Status"] = (
+            f"\u26a0\ufe0f BREACHED ({total_elapsed:.2f}s > {sla_seconds:.0f}s)"
+        )
 
     rejected = _last_dlq_data.get("rejected", 0)
     if rejected is not None and rejected > 0:
@@ -698,14 +694,18 @@ def _build_pipeline(args: argparse.Namespace) -> List[Tuple[str, callable]]:
         steps: List[Tuple[str, callable]] = []
         for exec_date in _daterange(args.start_date, args.end_date):
             # Capture by-value so the closure correctly remembers the date.
-            steps.append((
-                f"Generate Data ({exec_date})",
-                lambda ed=exec_date: step_generate_data(profile=args.profile),
-            ))
-            steps.append((
-                f"Load to PostgreSQL ({exec_date})",
-                lambda ed=exec_date: step_load_to_postgres(execution_date=ed),
-            ))
+            steps.append(
+                (
+                    f"Generate Data ({exec_date})",
+                    lambda ed=exec_date: step_generate_data(profile=args.profile),
+                )
+            )
+            steps.append(
+                (
+                    f"Load to PostgreSQL ({exec_date})",
+                    lambda ed=exec_date: step_load_to_postgres(execution_date=ed),
+                )
+            )
         # Remaining stages (dbt, test, export, docs, lineage, profile) run
         # once after all historical dates have been loaded.
         for name, fn in PIPELINE_STEPS[2:]:
@@ -810,7 +810,11 @@ def main() -> None:
     print()
 
     # ── Phase duration tracking ─────────────────────────────────────────
-    phase_durations: Dict[str, float] = {"Ingestion": 0.0, "Transformation": 0.0, "Consumption": 0.0}
+    phase_durations: Dict[str, float] = {
+        "Ingestion": 0.0,
+        "Transformation": 0.0,
+        "Consumption": 0.0,
+    }
 
     try:
         for step_num, (step_name, step_fn) in enumerate(pipeline, start=1):
@@ -849,9 +853,7 @@ def main() -> None:
             else:
                 logger.critical(STEP_FAIL.format(name=step_name, code=rc))
                 pipeline_status = "SCHEMA_DRIFT" if rc == 2 else "FAILED"
-                pipeline_error = (
-                    f"Step '{step_name}' failed with exit code {rc}"
-                )
+                pipeline_error = f"Step '{step_name}' failed with exit code {rc}"
                 # Circuit breaker: dispatch critical alert before exiting.
                 _send_step_failure_alert(step_name, rc)
                 print()
@@ -889,7 +891,10 @@ def main() -> None:
         print("+" + "=" * 70 + "+")
         print("|  %s  PIPELINE COMPLETE" % ("WARN" if sla_breached else "OK"))
         msg = "|  All %d steps succeeded in %.2f seconds.  SLA: %s (max %.0fs)" % (
-            total_steps, total_elapsed, sla_status, args.sla_seconds,
+            total_steps,
+            total_elapsed,
+            sla_status,
+            args.sla_seconds,
         )
         print(msg)
         print(phase_line)

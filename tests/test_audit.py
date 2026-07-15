@@ -32,6 +32,7 @@ class TestAuditContextInit:
     def test_run_id_is_uuid(self) -> None:
         ctx = AuditContext()
         import uuid
+
         assert uuid.UUID(ctx.run_id)
 
     def test_start_time_is_set(self) -> None:
@@ -75,6 +76,7 @@ class TestAuditFinalize:
     def test_sets_end_time_and_duration(self) -> None:
         ctx = AuditContext()
         import time
+
         time.sleep(0.01)
         ctx.finalize(status="SUCCESS")
         assert ctx.status == "SUCCESS"

@@ -46,8 +46,8 @@ _COLORS: Dict[str, int] = {
 
 _STATUS_EMOJI: Dict[str, str] = {
     "success": "\u2705",
-    "warning": "\u26A0\uFE0F",
-    "critical": "\uD83D\uDCA5",
+    "warning": "\u26a0\ufe0f",
+    "critical": "\ud83d\udca5",
 }
 
 _STATUS_LABEL: Dict[str, str] = {
@@ -145,49 +145,61 @@ def _build_slack_payload(
 
     blocks: list[Dict[str, Any]] = []
 
-    blocks.append({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": f"{emoji}  RetailFlow Pipeline — {label}",
-            "emoji": True,
-        },
-    })
+    blocks.append(
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"{emoji}  RetailFlow Pipeline — {label}",
+                "emoji": True,
+            },
+        }
+    )
 
-    blocks.append({
-        "type": "context",
-        "elements": [{
-            "type": "mrkdwn",
-            "text": (
-                f"*Stage:* {stage}   |   *Timestamp:* "
-                f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
-            ),
-        }],
-    })
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*Stage:* {stage}   |   *Timestamp:* "
+                        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                    ),
+                }
+            ],
+        }
+    )
 
     blocks.append({"type": "divider"})
 
     if details:
         field_chunks: list[Dict[str, str]] = []
         for key, value in details.items():
-            field_chunks.append({
-                "type": "mrkdwn",
-                "text": f"*{key}:*\n{value}",
-            })
+            field_chunks.append(
+                {
+                    "type": "mrkdwn",
+                    "text": f"*{key}:*\n{value}",
+                }
+            )
         for i in range(0, len(field_chunks), 10):
-            chunk = field_chunks[i:i + 10]
+            chunk = field_chunks[i : i + 10]
             blocks.append({"type": "section", "fields": chunk})
 
-    blocks.append({
-        "type": "context",
-        "elements": [{
-            "type": "mrkdwn",
-            "text": (
-                "RetailFlow Pipeline  •  "
-                "<https://github.com/elhussienysabry/retailflow-pipeline|GitHub>"
-            ),
-        }],
-    })
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": (
+                        "RetailFlow Pipeline  •  "
+                        "<https://github.com/elhussienysabry/retailflow-pipeline|GitHub>"
+                    ),
+                }
+            ],
+        }
+    )
 
     return {
         "text": f"{emoji} RetailFlow Pipeline — {label} — Stage: {stage}",
@@ -238,12 +250,16 @@ def _post_webhook(
     except requests.Timeout as exc:
         logger.error(
             "Failed to send %s — request timed out (%ss): %s",
-            label, _REQUEST_TIMEOUT, exc,
+            label,
+            _REQUEST_TIMEOUT,
+            exc,
         )
         return False
     except requests.RequestException as exc:
         logger.error(
-            "Failed to send %s — unexpected request error: %s", label, exc,
+            "Failed to send %s — unexpected request error: %s",
+            label,
+            exc,
         )
         return False
 
@@ -255,7 +271,9 @@ def _post_webhook(
     # ── HTTP error: log response body for debugging ──────────────────
     logger.error(
         "%s rejected — HTTP %s — response: %s",
-        label, resp.status_code, resp.text[:500],
+        label,
+        resp.status_code,
+        resp.text[:500],
     )
 
     # ── Fallback: try a plain text message for Discord ───────────────
@@ -267,11 +285,14 @@ def _post_webhook(
         except requests.RequestException:
             return False
         if resp2.ok:
-            logger.info("Fallback plain-text message delivered — HTTP %s", resp2.status_code)
+            logger.info(
+                "Fallback plain-text message delivered — HTTP %s", resp2.status_code
+            )
             return True
         logger.error(
             "Fallback also rejected — HTTP %s: %s",
-            resp2.status_code, resp2.text[:500],
+            resp2.status_code,
+            resp2.text[:500],
         )
 
     return False
@@ -311,7 +332,9 @@ def parse_dbt_test_results(run_results_path: str) -> Dict[str, Any]:
     summary = {"total": len(results), "failed": failed, "errored": errored}
     logger.info(
         "dbt test results: %d total, %d failed, %d errored",
-        summary["total"], len(failed), len(errored),
+        summary["total"],
+        len(failed),
+        len(errored),
     )
     return summary
 
@@ -339,7 +362,7 @@ def send_dbt_test_alert(run_results_path: str, exit_code: int) -> bool:
 
     for t in all_bad[:5]:
         uid_short = t["unique_id"].split(".")[-1]
-        details[f"\u274C {t['status'].upper()} \u2014 {uid_short}"] = (
+        details[f"\u274c {t['status'].upper()} \u2014 {uid_short}"] = (
             t["message"] or f"execution_time={t['execution_time']}s"
         )
 
@@ -413,7 +436,9 @@ def _test_webhook() -> int:
         print("  [OK]  Test payload delivered successfully!\n")
         return 0
 
-    print("  [FAIL]  Rich payload failed. Fallback already attempted by _post_webhook.\n")
+    print(
+        "  [FAIL]  Rich payload failed. Fallback already attempted by _post_webhook.\n"
+    )
     return 1
 
 

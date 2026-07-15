@@ -35,9 +35,24 @@ logger = logging.getLogger(__name__)
 # Scale profiles for quick dataset sizing
 #   - pos_sales are ~30 % of online orders, representing in-store traffic.
 SCALE_PROFILES: Dict[str, Dict[str, int]] = {
-    "small": {"customers": 1_000, "products": 100, "orders": 10_000, "pos_sales": 3_000},
-    "medium": {"customers": 10_000, "products": 500, "orders": 100_000, "pos_sales": 30_000},
-    "large": {"customers": 100_000, "products": 5_000, "orders": 1_000_000, "pos_sales": 300_000},
+    "small": {
+        "customers": 1_000,
+        "products": 100,
+        "orders": 10_000,
+        "pos_sales": 3_000,
+    },
+    "medium": {
+        "customers": 10_000,
+        "products": 500,
+        "orders": 100_000,
+        "pos_sales": 30_000,
+    },
+    "large": {
+        "customers": 100_000,
+        "products": 5_000,
+        "orders": 1_000_000,
+        "pos_sales": 300_000,
+    },
 }
 
 DEFAULT_PROFILE = "medium"
@@ -65,20 +80,37 @@ ORDER_STATUSES: List[Tuple[str, float]] = [
 
 # Store IDs for POS locations
 STORE_IDS: List[str] = [
-    "STORE_NYC_001", "STORE_LAX_002", "STORE_CHI_003",
-    "STORE_HOU_004", "STORE_PHX_005", "STORE_PHL_006",
-    "STORE_SFO_007", "STORE_BOS_008", "STORE_DFW_009",
+    "STORE_NYC_001",
+    "STORE_LAX_002",
+    "STORE_CHI_003",
+    "STORE_HOU_004",
+    "STORE_PHX_005",
+    "STORE_PHL_006",
+    "STORE_SFO_007",
+    "STORE_BOS_008",
+    "STORE_DFW_009",
     "STORE_MIA_010",
 ]
 
 # Payment methods used in physical stores
 PAYMENT_METHODS: List[str] = [
-    "credit_card", "debit_card", "cash", "mobile_wallet",
+    "credit_card",
+    "debit_card",
+    "cash",
+    "mobile_wallet",
 ]
 
 SUPPLIER_COUNTRIES: List[str] = [
-    "China", "USA", "Germany", "India", "Vietnam",
-    "Mexico", "Japan", "South Korea", "Italy", "Brazil",
+    "China",
+    "USA",
+    "Germany",
+    "India",
+    "Vietnam",
+    "Mexico",
+    "Japan",
+    "South Korea",
+    "Italy",
+    "Brazil",
 ]
 
 
@@ -100,8 +132,8 @@ def parse_args() -> argparse.Namespace:
         choices=list(SCALE_PROFILES.keys()),
         default=DEFAULT_PROFILE,
         help=f"Scale profile: {', '.join(SCALE_PROFILES.keys())} "
-             f"(default: {DEFAULT_PROFILE}). Overridden by explicit --customers, "
-             f"--products, or --orders flags.",
+        f"(default: {DEFAULT_PROFILE}). Overridden by explicit --customers, "
+        f"--products, or --orders flags.",
     )
     parser.add_argument(
         "--customers",
@@ -168,8 +200,15 @@ def generate_customers(num_customers: int) -> str:
     filepath = os.path.join(output_dir, "customers.csv")
 
     fieldnames = [
-        "customer_id", "first_name", "last_name", "email",
-        "country", "city", "signup_date", "age", "gender",
+        "customer_id",
+        "first_name",
+        "last_name",
+        "email",
+        "country",
+        "city",
+        "signup_date",
+        "age",
+        "gender",
     ]
 
     with open(filepath, mode="w", newline="", encoding="utf-8") as f:
@@ -191,7 +230,9 @@ def generate_customers(num_customers: int) -> str:
                         start_date="-3y", end_date="today"
                     ).isoformat(),
                     "age": fake.random_int(min=18, max=80),
-                    "gender": fake.random_element(elements=("Male", "Female", "Non-binary")),
+                    "gender": fake.random_element(
+                        elements=("Male", "Female", "Non-binary")
+                    ),
                 }
             )
 
@@ -212,8 +253,12 @@ def generate_products(num_products: int) -> str:
     filepath = os.path.join(output_dir, "products.csv")
 
     fieldnames = [
-        "product_id", "name", "category",
-        "price_cents", "stock_quantity", "supplier_country",
+        "product_id",
+        "name",
+        "category",
+        "price_cents",
+        "stock_quantity",
+        "supplier_country",
     ]
 
     # WHY: Pre-compute categories map so each product gets a weighted random category.
@@ -259,8 +304,14 @@ def generate_orders(
     filepath = os.path.join(output_dir, "orders.csv")
 
     fieldnames = [
-        "order_id", "customer_id", "product_id", "quantity",
-        "order_date", "status", "discount_pct", "shipping_days",
+        "order_id",
+        "customer_id",
+        "product_id",
+        "quantity",
+        "order_date",
+        "status",
+        "discount_pct",
+        "shipping_days",
     ]
 
     statuses = [s for s, _ in ORDER_STATUSES]
@@ -290,9 +341,7 @@ def generate_orders(
     return filepath
 
 
-def generate_pos_store_sales(
-    num_sales: int, product_ids: List[str]
-) -> str:
+def generate_pos_store_sales(num_sales: int, product_ids: List[str]) -> str:
     """Generate a JSON file of point-of-sale store transactions.
 
     Args:
@@ -316,8 +365,7 @@ def generate_pos_store_sales(
                 "quantity": fake.random_int(min=1, max=5),
                 "unit_price_cents": fake.random_int(min=199, max=99999),
                 "total_amount": round(
-                    fake.random_int(min=199, max=99999)
-                    * fake.random_int(min=1, max=5),
+                    fake.random_int(min=199, max=99999) * fake.random_int(min=1, max=5),
                     2,
                 ),
                 "transaction_timestamp": ts.isoformat(),

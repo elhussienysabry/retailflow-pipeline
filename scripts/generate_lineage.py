@@ -34,10 +34,10 @@ OUTPUT_PATH = OUTPUT_DIR / "current_data_lineage.png"
 # Colour palette chosen for accessibility (ColorBrewer-inspired).
 
 LAYER_COLORS: Dict[str, str] = {
-    "staging": "#2E8B57",       # sea green
+    "staging": "#2E8B57",  # sea green
     "intermediate": "#4169E1",  # royal blue
-    "marts": "#DAA520",         # goldenrod
-    "source": "#808080",        # grey (not rendered as model node)
+    "marts": "#DAA520",  # goldenrod
+    "source": "#808080",  # grey (not rendered as model node)
 }
 
 LAYER_ORDER: List[str] = ["staging", "intermediate", "marts"]

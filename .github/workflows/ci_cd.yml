@@ -51,7 +51,7 @@ jobs:
 
       - name: Lint with flake8
         run: |
-          flake8 scripts/ tests/ --max-line-length=100 --ignore=E501,W503
+          flake8 scripts/ tests/ --max-line-length=100 --ignore=E203,E501,W503
 
       - name: Check formatting with black
         run: |

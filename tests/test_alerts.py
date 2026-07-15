@@ -77,7 +77,8 @@ class TestBuildDiscordPayload:
 
     def test_includes_details_as_fields(self) -> None:
         payload = _build_discord_payload(
-            "critical", "schema-drift",
+            "critical",
+            "schema-drift",
             {"Entity": "customers", "Severity": "CRITICAL"},
         )
         embed = payload["embeds"][0]
@@ -119,7 +120,8 @@ class TestBuildSlackPayload:
 
     def test_includes_details_in_fields(self) -> None:
         payload = _build_slack_payload(
-            "critical", "schema-drift",
+            "critical",
+            "schema-drift",
             {"Rows": "1000", "Rejected": "5"},
         )
         attachment = payload["attachments"][0]
@@ -171,16 +173,19 @@ class TestPostWebhook:
         )
         assert result is False
 
-    @patch("scripts.alerts.requests.Session.post", side_effect=requests.exceptions.ConnectionError)
-    def test_connection_error_returns_false(
-        self, mock_post: MagicMock
-    ) -> None:
+    @patch(
+        "scripts.alerts.requests.Session.post",
+        side_effect=requests.exceptions.ConnectionError,
+    )
+    def test_connection_error_returns_false(self, mock_post: MagicMock) -> None:
         result = _post_webhook(
             {"content": "test"}, "https://hook.example.com", label="test"
         )
         assert result is False
 
-    @patch("scripts.alerts.requests.Session.post", side_effect=requests.exceptions.Timeout)
+    @patch(
+        "scripts.alerts.requests.Session.post", side_effect=requests.exceptions.Timeout
+    )
     def test_timeout_returns_false(self, mock_post: MagicMock) -> None:
         result = _post_webhook(
             {"content": "test"}, "https://hook.example.com", label="test"
@@ -217,25 +222,27 @@ class TestSendPipelineAlert:
         result = send_pipeline_alert("success", "test")
         assert result is False
 
-    @patch("scripts.alerts._get_webhook_url", return_value="https://discord.com/api/webhooks/xxx")
+    @patch(
+        "scripts.alerts._get_webhook_url",
+        return_value="https://discord.com/api/webhooks/xxx",
+    )
     @patch("scripts.alerts._post_webhook", return_value=True)
     def test_discord_payload_built_and_sent(
         self, mock_post: MagicMock, mock_url: MagicMock
     ) -> None:
-        result = send_pipeline_alert(
-            "success", "ingestion", {"Rows": "1000"}
-        )
+        result = send_pipeline_alert("success", "ingestion", {"Rows": "1000"})
         assert result is True
         assert mock_post.called
 
-    @patch("scripts.alerts._get_webhook_url", return_value="https://hooks.slack.com/services/xxx")
+    @patch(
+        "scripts.alerts._get_webhook_url",
+        return_value="https://hooks.slack.com/services/xxx",
+    )
     @patch("scripts.alerts._post_webhook", return_value=True)
     def test_slack_payload_built_and_sent(
         self, mock_post: MagicMock, mock_url: MagicMock
     ) -> None:
-        result = send_pipeline_alert(
-            "warning", "dbt-test", {"Failed": "3"}
-        )
+        result = send_pipeline_alert("warning", "dbt-test", {"Failed": "3"})
         assert result is True
         assert mock_post.called
 

@@ -150,7 +150,7 @@ coverage:  # Run pytest with coverage report
 
 lint:  # Run flake8 linting on all Python files
 	@echo ">> Running flake8 linter..."
-	@.venv\Scripts\flake8 scripts\ airflow\ tests\ --max-line-length=100
+	@.venv\Scripts\flake8 scripts\ airflow\ tests\ --max-line-length=100 --ignore=E203,E501,W503
 	@echo ">> Linting complete."
 
 format:  # Auto-format all Python code with black
