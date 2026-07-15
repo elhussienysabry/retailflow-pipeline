@@ -97,33 +97,16 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install dbt & psycopg2
+      - name: Install dbt
         run: |
           python -m pip install --upgrade pip
-          pip install dbt-core==1.7.14 dbt-postgres==1.7.14 psycopg2-binary
+          pip install dbt-core==1.7.14 dbt-postgres==1.7.14
 
-      - name: Create raw schema
+      - name: Create raw & snapshots schemas
         run: |
-          python -c "
-import psycopg2
-conn = psycopg2.connect(
-    host='${{ env.POSTGRES_HOST }}',
-    port=${{ env.POSTGRES_PORT }},
-    user='${{ env.POSTGRES_USER }}',
-    password='${{ env.POSTGRES_PASSWORD }}',
-    dbname='${{ env.POSTGRES_DB }}'
-)
-conn.autocommit = True
-cur = conn.cursor()
-cur.execute('CREATE SCHEMA IF NOT EXISTS raw')
-cur.execute('CREATE SCHEMA IF NOT EXISTS snapshots')
-cur.close()
-conn.close()
-print('Schemas created: raw, snapshots')
-"
+          psql -h ${{ env.POSTGRES_HOST }} -p ${{ env.POSTGRES_PORT }} -U ${{ env.POSTGRES_USER }} -d ${{ env.POSTGRES_DB }} -c "CREATE SCHEMA IF NOT EXISTS raw; CREATE SCHEMA IF NOT EXISTS snapshots;"
         env:
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
+          PGPASSWORD: ${{ env.POSTGRES_PASSWORD }}
 
       - name: dbt debug
         run: dbt debug
