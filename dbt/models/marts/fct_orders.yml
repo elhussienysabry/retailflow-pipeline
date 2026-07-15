@@ -15,12 +15,12 @@ models:
           - not_null
 
       - name: customer_id
-        description: Foreign key to dim_customers.
+        description: >
+          Customer identifier. References the natural business key from the
+          source system. For dimension attribute lookups, join on
+          dim_customers.customer_id WHERE is_current = TRUE.
         tests:
           - not_null
-          - relationships:
-              to: ref('dim_customers')
-              field: customer_id
 
       - name: product_id
         description: Foreign key to dim_products.

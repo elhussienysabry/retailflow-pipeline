@@ -27,7 +27,8 @@ cleaned AS (
         TRIM(city) AS city,
         CAST(signup_date AS DATE) AS signup_date,
         age,
-        TRIM(gender) AS gender
+        TRIM(gender) AS gender,
+        _execution_date
     FROM latest
     WHERE customer_id IS NOT NULL
 ),

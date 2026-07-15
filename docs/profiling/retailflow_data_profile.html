@@ -124,14 +124,14 @@
   <header>
     <div>
       <h1>RetailFlow Pipeline — Data Profile Report</h1>
-      <div class="meta">Generated: 2026-07-15 09:56:11 UTC &middot; 3
-        tables &middot; 11,100 rows &middot; 30 columns</div>
+      <div class="meta">Generated: 2026-07-15 12:18:17 UTC &middot; 3
+        tables &middot; 11,100 rows &middot; 34 columns</div>
     </div>
   </header>
 
   <div class="summary-bar">
     <div class="pill"><strong>11,100</strong> Rows</div>
-    <div class="pill"><strong>30</strong> Columns</div>
+    <div class="pill"><strong>34</strong> Columns</div>
     <div class="pill"><strong>3</strong> Tables</div>
   </div>
 
@@ -149,10 +149,10 @@
         <div class="tab-content active" id="content-dim_customers">
           <div class="summary-row">
           <div class="card"><span class="card-val">1,000</span><span class="card-label">Total Rows</span></div>
-          <div class="card"><span class="card-val">11</span><span class="card-label">Columns</span></div>
+          <div class="card"><span class="card-val">15</span><span class="card-label">Columns</span></div>
           <div class="card"><span class="card-val">3</span><span class="card-label">Numeric</span></div>
-          <div class="card"><span class="card-val">8</span><span class="card-label">Categorical</span></div>
-          <div class="card"><span class="card-val">0</span><span class="card-label">Null Cells</span></div>
+          <div class="card"><span class="card-val">12</span><span class="card-label">Categorical</span></div>
+          <div class="card"><span class="card-val">1,000</span><span class="card-label">Null Cells</span></div>
           <div class="card warn"><span class="card-val">4</span><span class="card-label">High-Cardinality</span></div>
         </div>
           <table class="profile-table">
@@ -168,6 +168,29 @@
             </thead>
             <tbody>
               
+            <tr>
+              <td class="col-name">customer_key <span class="badge badge-warning">High-Cardinality</span></td>
+              <td><code>TEXT</code></td>
+              <td class="num">1,000</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">003121fff760d35152630b1c87ac2b00</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.1%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
             <tr>
               <td class="col-name">customer_id <span class="badge badge-warning">High-Cardinality</span></td>
               <td><code>TEXT</code></td>
@@ -185,7 +208,7 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
-  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">00182308-43f0-4f02-adb8-a9a4281427f4</span></div>
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">c31213aa-5862-497c-8461-7350113187c7</span></div>
   <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.1%)</span></div>
 </div>
                 </details>
@@ -254,7 +277,7 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
-  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">074b2dc76b1d9e9a7b49e362aa802aba7091cdb2a74ec1581c998424743da878</span></div>
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">b2909246864353190ae72212597626b2c062dc99af0318f0e416e3957712137b</span></div>
   <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.1%)</span></div>
 </div>
                 </details>
@@ -323,7 +346,7 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
-  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">2026-04-16 00:00:00</span></div>
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">2024-11-28 00:00:00</span></div>
   <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">5 (0.5%)</span></div>
 </div>
                 </details>
@@ -382,9 +405,75 @@
               </td>
             </tr>
             <tr>
-              <td class="col-name">total_orders </td>
+              <td class="col-name">dbt_valid_from </td>
+              <td><code>DATE</code></td>
+              <td class="num">1</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">2026-07-15 00:00:00</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1,000 (100.0%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">dbt_valid_to <span class="badge badge-danger">ALL NULL</span></td>
+              <td><code>DATE</code></td>
+              <td class="num">0</td>
+              <td class="num">1,000</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:100.0%;background:#dc3545;"
+                  ></div>
+                </div>
+                <span class="bar-label">100.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">is_current </td>
+              <td><code>BOOLEAN</code></td>
+              <td class="num">1</td>
+              <td class="num">0</td>
+              <td class="bar-cell">
+                <div class="bar-container">
+                  <div class="bar-fill"
+                  style="width:0.0%;background:#28a745;"
+                  ></div>
+                </div>
+                <span class="bar-label">0.0%</span>
+              </td>
+              <td class="stats-cell">
+                <details>
+                  <summary>Stats</summary>
+                  <div class="stats-grid compact">
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">True</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1,000 (100.0%)</span></div>
+</div>
+                </details>
+              </td>
+            </tr>
+            <tr>
+              <td class="col-name">total_orders <span class="badge badge-info">Constant</span></td>
               <td><code>BIGINT</code></td>
-              <td class="num">20</td>
+              <td class="num">1</td>
               <td class="num">0</td>
               <td class="bar-cell">
                 <div class="bar-container">
@@ -398,22 +487,22 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid">
-                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">3</span></div>
-                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">22</span></div>
-                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">10</span></div>
-                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">10</span></div>
-                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">3.1080</span></div>
-                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">8</span></div>
-                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">12</span></div>
-                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.4695</span></div>
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.0</span></div>
                 </div>
                 </details>
               </td>
             </tr>
             <tr>
-              <td class="col-name">lifetime_value_cents <span class="badge badge-warning">High-Cardinality</span></td>
+              <td class="col-name">lifetime_value_cents <span class="badge badge-info">Constant</span></td>
               <td><code>BIGINT</code></td>
-              <td class="num">1,000</td>
+              <td class="num">1</td>
               <td class="num">0</td>
               <td class="bar-cell">
                 <div class="bar-container">
@@ -427,14 +516,14 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid">
-                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">301,338.00</span></div>
-                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">7,789,685.00</span></div>
-                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">2,722,457.60</span></div>
-                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">2,606,996.00</span></div>
-                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">1,107,968.49</span></div>
-                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">1,925,075.50</span></div>
-                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">3,345,630.75</span></div>
-                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.7263</span></div>
+                  <div class="stat"><span class="stat-label">Min</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Max</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Mean</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Median</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Std Dev</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">P25</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">P75</span><span class="stat-val">0</span></div>
+                  <div class="stat"><span class="stat-label">Skew</span><span class="stat-val">0.0</span></div>
                 </div>
                 </details>
               </td>
@@ -481,7 +570,7 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
-  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">09ad5201-9d0c-418f-8fa9-a1cf4aa144a5</span></div>
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">0c5cd216-b383-43c2-9e2f-f43d7e0fcf69</span></div>
   <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (1.0%)</span></div>
 </div>
                 </details>
@@ -504,7 +593,7 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
-  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">Growth Current</span></div>
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">Get Commercial</span></div>
   <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (1.0%)</span></div>
 </div>
                 </details>
@@ -743,7 +832,7 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
-  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">00140b03-c8f6-4066-89ab-620d52e2531c</span></div>
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">000095ef-b9f1-41fe-9ffa-884d250ef73a</span></div>
   <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">1 (0.01%)</span></div>
 </div>
                 </details>
@@ -766,7 +855,7 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
-  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">d19ed28b-ce0f-4902-b971-8870d5aaa9ef</span></div>
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">80501258-1837-47e7-a5da-8d21e7d35697</span></div>
   <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">22 (0.22%)</span></div>
 </div>
                 </details>
@@ -789,7 +878,7 @@
                 <details>
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
-  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">c6549053-be51-497f-9490-c7f0ab027d00</span></div>
+  <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">c2cce814-721e-4ff5-9637-9c4f4e2bee34</span></div>
   <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">122 (1.22%)</span></div>
 </div>
                 </details>
@@ -894,7 +983,7 @@
                   <summary>Stats</summary>
                   <div class="stats-grid compact">
   <div class="stat"><span class="stat-label">Top Value</span><span class="stat-val top-val">completed</span></div>
-  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">7,905 (79.05%)</span></div>
+  <div class="stat"><span class="stat-label">Top Freq</span><span class="stat-val">8,040 (80.4%)</span></div>
 </div>
                 </details>
               </td>
