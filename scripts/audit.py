@@ -162,7 +162,8 @@ class AuditContext:
                         conn.execute(text(stripped))
                 conn.commit()
 
-            insert_sql = text("""
+            insert_sql = text(
+                """
                 INSERT INTO audit.pipeline_runs (
                     run_id, start_time, end_time, status,
                     records_ingested, records_rejected,
@@ -174,7 +175,8 @@ class AuditContext:
                     :parquet_file_path, :duration_seconds,
                     :sla_breached, :error_message
                 )
-            """)
+            """
+            )
             with engine.begin() as conn:
                 conn.execute(
                     insert_sql,
