@@ -492,6 +492,45 @@ This design gives zero-copy columnar reads from Parquet, eliminates PostgreSQL-s
 
 **Idempotent upsert** uses `INSERT ... ON CONFLICT (transaction_id, source_system) DO UPDATE` — guaranteed zero duplicates on re-run.
 
+### 4.3 Data Contracts — `scripts/schemas.py`
+
+**Purpose:** Enforce upstream data quality guarantees at the ingestion boundary using **Pandera** schema models. Contract violations are isolated in a **quarantine** area without blocking the pipeline.
+
+#### Contract Schema Models
+
+| Contract | Source File | Validations |
+|----------|-------------|-------------|
+| **CustomerContract** | `customers.csv` | `email` regex pattern, `age` ∈ [18, 100], `gender` ∈ {Male, Female, Other} |
+| **ProductContract** | `products.csv` | `product_id` unique, `price_cents` > 0 |
+
+#### Non-Blocking Validation Flow
+
+```
+chunk → validate_with_contract(chunk, filename)
+  ├── No contract → pass through
+  ├── No violations → pass through
+  └── Violations found (lazy mode)
+       ├── Clean rows → continue to guardrails
+       └── Violating rows → _write_quarantine() → data/quarantine/
+```
+
+**Key design decisions:**
+
+- **Lazy validation** (`schema.validate(df, lazy=True)`) — collects ALL violation indices in one pass, avoiding fail-fast behaviour
+- **`_extract_failure_indices()`** — deduplicates row indices from `SchemaErrors` to produce a single set of violating positions
+- **`quarantine_reason`** column — human-readable description (`column_name: check_name`) for each violating row
+- **Layer placement** — Data Contracts run *before* existing quality guardrails, so contract-violating rows never reach the guardrail or DB stages
+- **Unregistered entities** (orders, pos_store_sales) pass through unchecked — contracts are opt-in via `CONTRACT_MAP`
+
+#### Quarantine Output
+
+Violating rows are written to `data/quarantine/` as timestamped CSVs with an extra `quarantine_reason` column:
+```
+data/quarantine/
+  quarantine_customers_20260716_161543.csv
+  quarantine_products_20260716_165201.csv
+```
+
 ---
 
 ## 5. Layer 2 — PostgreSQL Warehouse & Idempotency

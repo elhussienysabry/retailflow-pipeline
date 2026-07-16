@@ -242,6 +242,17 @@ This guarantees that running the pipeline N times on the same calendar day produ
 
 Webhook failures are gracefully handled with Discord embed → plain-text fallback. Alerts never crash the pipeline.
 
+### Upstream Data Quality & Data Contracts
+
+`scripts/schemas.py` enforces **Pandera** data contracts at the ingestion boundary. Contract violations are routed to a **quarantine** (`data/quarantine/`) rather than blocking the pipeline:
+
+| Contract | Validations |
+|----------|-------------|
+| **CustomerContract** | `email` regex, `age` 18–100, `gender` ∈ {Male, Female, Other} |
+| **ProductContract** | `product_id` unique, `price_cents` > 0 |
+
+Validation runs **before** quality guardrails and uses **lazy mode** to collect all violations in a single pass. Violating rows get a `quarantine_reason` and are written to timestamped CSVs under `data/quarantine/`.
+
 ### dbt Incremental Materialisation
 
 `fct_orders` uses dbt's incremental model with `unique_key='order_id'`. The orchestrator passes `--full-refresh` on `marts` each run so dimension tables (FK references) stay in sync:
