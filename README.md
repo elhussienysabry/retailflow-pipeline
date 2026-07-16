@@ -1,4 +1,4 @@
-# RetailFlow Pipeline — v1.5.2
+# RetailFlow Pipeline — v1.3.2
 
 [![CI/CD Build Status](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml/badge.svg)](https://github.com/elhussienysabry/retailflow-pipeline/actions/workflows/ci_cd.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
