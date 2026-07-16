@@ -9,12 +9,13 @@ for the embedded DuckDB OLAP layer.
 
 Pipeline flow:
     1. Schema drift detection (blueprint comparison)
-    2. Per-entity validation guardrails
-    3. PII anonymization (SHA-256)
-    4. Idempotent PostgreSQL load (DELETE BY execution_date + INSERT)
-    5. ✅ NEW — Parquet columnar serialisation (Snappy) to data/lakehouse/
-    6. ✅ NEW — DuckDB in-memory harmonisation (reads .parquet, writes unified)
-    7. Dead Letter Queue for rejected rows
+    2. ✅ Data Contract validation (Pandera) — non-blocking quarantine
+    3. Per-entity validation guardrails
+    4. PII anonymization (SHA-256)
+    5. Idempotent PostgreSQL load (DELETE BY execution_date + INSERT)
+    6. ✅ NEW — Parquet columnar serialisation (Snappy) to data/lakehouse/
+    7. ✅ NEW — DuckDB in-memory harmonisation (reads .parquet, writes unified)
+    8. Dead Letter Queue for rejected rows + Quarantine for contract violations
 
 Supports multi-source hybrid ingestion:
     - ``customers.csv``   — online customer records
@@ -49,6 +50,8 @@ import duckdb
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+
+from scripts.schemas import validate_with_contract
 
 logger = logging.getLogger(__name__)
 
@@ -475,6 +478,28 @@ def _write_dlq(entity_name: str, rejected_df: pd.DataFrame) -> None:
 
     rejected_df.to_csv(out_path, index=False)
     logger.info("DLQ written: %s (%d row(s))", out_path, len(rejected_df))
+
+
+def _write_quarantine(entity_name: str, quarantine_df: pd.DataFrame) -> None:
+    """Append contract-violating rows to a timestamped quarantine CSV.
+
+    Args:
+        entity_name: Entity name (e.g. 'customer', 'product').
+        quarantine_df: DataFrame with violating rows + ``quarantine_reason``.
+    """
+    if quarantine_df.empty:
+        return
+
+    quarantine_dir = os.path.join(os.path.dirname(__file__), "..", "data", "quarantine")
+    os.makedirs(quarantine_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = os.path.join(
+        quarantine_dir, f"quarantine_{entity_name}s_{timestamp}.csv"
+    )
+
+    quarantine_df.to_csv(out_path, index=False)
+    logger.info("Quarantine written: %s (%d row(s))", out_path, len(quarantine_df))
 
 
 # ---------------------------------------------------------------------------
@@ -920,7 +945,14 @@ def load_csv_to_table(
     clean_chunks: List[pd.DataFrame] = []
 
     for chunk in pd.read_csv(filepath, dtype=DTYPE_MAP, chunksize=chunk_size):
-        clean_chunk, rejected_chunk = _validate_and_split(csv_filename, chunk)
+        # Step 1: Data Contract validation (Pandera) — non-blocking.
+        # Contract violations are quarantined; clean rows proceed.
+        clean_chunk, quarantine_chunk = validate_with_contract(chunk, csv_filename)
+        if not quarantine_chunk.empty:
+            _write_quarantine(entity_name, quarantine_chunk)
+
+        # Step 2: Existing guardrail validation on contract-clean rows.
+        clean_chunk, rejected_chunk = _validate_and_split(csv_filename, clean_chunk)
 
         if not clean_chunk.empty:
             # Tag every row with the current execution date for idempotency.
