@@ -51,8 +51,8 @@ SHEET_NAMES: List[str] = [
 HEADER_FILL = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
 HEADER_FONT = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
 NORMAL_FONT = Font(name="Calibri", size=11)
-CURRENCY_FORMAT = '#,##0.00'
-DATE_FORMAT = 'YYYY-MM-DD'
+CURRENCY_FORMAT = "#,##0.00"
+DATE_FORMAT = "YYYY-MM-DD"
 
 
 def _get_env(key: str, fallback: str) -> str:
@@ -280,9 +280,7 @@ def build_workbook(data: Dict[str, pd.DataFrame]) -> Workbook:
         for col_idx, col_name in enumerate(df.columns, start=1):
             ws.cell(row=1, column=col_idx, value=col_name)
 
-        for row_idx, row in enumerate(
-            df.itertuples(index=False), start=2
-        ):
+        for row_idx, row in enumerate(df.itertuples(index=False), start=2):
             for col_idx, value in enumerate(row, start=1):
                 ws.cell(row=row_idx, column=col_idx, value=value)
 

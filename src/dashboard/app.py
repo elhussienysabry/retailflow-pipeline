@@ -36,6 +36,15 @@ logger = logging.getLogger(__name__)
 PAGE_TITLE = "RetailFlow Pipeline Dashboard"
 PAGE_ICON = ":bar_chart:"
 
+# ── Simulated Row-Level Security (RLS) Roles ──────────────────────────────
+# Each non-admin role maps to a country filter applied downstream.
+ROLE_COUNTRY_MAP: Dict[str, Optional[str]] = {
+    "Global Admin": None,
+    "USA Analyst": "USA",
+    "Germany Analyst": "Germany",
+}
+RLS_ROLES = list(ROLE_COUNTRY_MAP.keys())
+
 st.set_page_config(page_title=PAGE_TITLE, page_icon=PAGE_ICON, layout="wide")
 st.session_state.setdefault("last_refresh", datetime.now(timezone.utc))
 
@@ -148,6 +157,23 @@ def get_engine() -> Engine:
     return create_engine(conn_str, echo=False)
 
 
+def _get_rls_country(role: str) -> Optional[str]:
+    return ROLE_COUNTRY_MAP.get(role)
+
+
+def _apply_rls(
+    df: pd.DataFrame, role: str, country_col: str = "country"
+) -> pd.DataFrame:
+    if df.empty or df is None:
+        return df
+    country = _get_rls_country(role)
+    if country is None:
+        return df
+    if country_col not in df.columns:
+        return df
+    return df.query(f"{country_col} == @country").reset_index(drop=True)
+
+
 def _is_undefined_table(exc: Exception) -> bool:
     msg = str(exc).lower()
     keywords = (
@@ -182,9 +208,26 @@ def _safe_query(
 
 
 @st.cache_data(ttl=300, show_spinner="Fetching KPI data...")
-def fetch_kpis(_engine: Engine) -> Tuple[int, float, int]:
+def fetch_kpis(_engine: Engine, _role: str = "Global Admin") -> Tuple[int, float, int]:
+    country = _get_rls_country(_role)
+    if country:
+        query = """
+            SELECT
+                COUNT(DISTINCT f.order_id) AS total_orders,
+                ROUND(SUM(f.net_revenue_dollars), 2) AS total_net_revenue,
+                COUNT(DISTINCT f.customer_id) AS active_customers
+            FROM marts.fct_orders AS f
+            INNER JOIN marts.dim_customers AS c
+                ON f.customer_id = c.customer_id AND c.is_current = TRUE
+            WHERE f.status = 'completed'
+              AND c.country = :country
+        """
+        params = {"country": country}
+    else:
+        query = QUERY_KPIS
+        params = {}
     try:
-        row = _engine.connect().execute(text(QUERY_KPIS)).one()
+        row = _engine.connect().execute(text(query), params).one()
         return row.total_orders, row.total_net_revenue, row.active_customers
     except Exception as exc:
         if _is_undefined_table(exc):
@@ -196,9 +239,31 @@ def fetch_kpis(_engine: Engine) -> Tuple[int, float, int]:
 
 
 @st.cache_data(ttl=300, show_spinner="Fetching extra KPIs...")
-def fetch_extra_kpis(_engine: Engine) -> Tuple[float, int, int]:
+def fetch_extra_kpis(
+    _engine: Engine, _role: str = "Global Admin"
+) -> Tuple[float, int, int]:
+    country = _get_rls_country(_role)
+    if country:
+        query = """
+            SELECT
+                ROUND(
+                    SUM(f.net_revenue_dollars)
+                    / NULLIF(COUNT(DISTINCT f.order_id), 0), 2
+                ) AS avg_order_value,
+                COUNT(DISTINCT CASE WHEN f.status != 'completed' THEN f.order_id END)
+                    AS non_completed,
+                COUNT(DISTINCT f.order_id) AS all_orders
+            FROM marts.fct_orders AS f
+            INNER JOIN marts.dim_customers AS c
+                ON f.customer_id = c.customer_id AND c.is_current = TRUE
+            WHERE c.country = :country
+        """
+        params = {"country": country}
+    else:
+        query = QUERY_EXTRA_KPIS
+        params = {}
     try:
-        row = _engine.connect().execute(text(QUERY_EXTRA_KPIS)).one()
+        row = _engine.connect().execute(text(query), params).one()
         return row.avg_order_value, row.non_completed, row.all_orders
     except Exception as exc:
         if _is_undefined_table(exc):
@@ -207,8 +272,25 @@ def fetch_extra_kpis(_engine: Engine) -> Tuple[float, int, int]:
 
 
 @st.cache_data(ttl=300, show_spinner="Fetching monthly sales...")
-def fetch_monthly_sales(_engine: Engine) -> pd.DataFrame:
-    r = _safe_query(_engine, QUERY_MONTHLY_SALES, "Monthly Sales")
+def fetch_monthly_sales(_engine: Engine, _role: str = "Global Admin") -> pd.DataFrame:
+    country = _get_rls_country(_role)
+    if country:
+        query = """
+            SELECT
+                DATE_TRUNC('month', f.order_date)::DATE AS month,
+                COUNT(DISTINCT f.order_id) AS total_orders,
+                ROUND(SUM(f.net_revenue_dollars), 2) AS net_revenue
+            FROM marts.fct_orders AS f
+            INNER JOIN marts.dim_customers AS c
+                ON f.customer_id = c.customer_id AND c.is_current = TRUE
+            WHERE f.status = 'completed'
+              AND c.country = :country
+            GROUP BY DATE_TRUNC('month', f.order_date)
+            ORDER BY month
+        """
+        r = _safe_query(_engine, query, "Monthly Sales")
+    else:
+        r = _safe_query(_engine, QUERY_MONTHLY_SALES, "Monthly Sales")
     return r if r is not None else pd.DataFrame()
 
 
@@ -219,15 +301,19 @@ def fetch_category_perf(_engine: Engine) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300, show_spinner="Fetching top customers...")
-def fetch_top_customers(_engine: Engine) -> pd.DataFrame:
+def fetch_top_customers(_engine: Engine, _role: str = "Global Admin") -> pd.DataFrame:
     r = _safe_query(_engine, QUERY_TOP_CUSTOMERS, "Top Customers")
-    return r if r is not None else pd.DataFrame()
+    if r is not None:
+        return _apply_rls(r, _role)
+    return pd.DataFrame()
 
 
 @st.cache_data(ttl=300, show_spinner="Fetching customer geography...")
-def fetch_customer_geo(_engine: Engine) -> pd.DataFrame:
+def fetch_customer_geo(_engine: Engine, _role: str = "Global Admin") -> pd.DataFrame:
     r = _safe_query(_engine, QUERY_CUSTOMER_GEO, "Customer Geography")
-    return r if r is not None else pd.DataFrame()
+    if r is not None:
+        return _apply_rls(r, _role)
+    return pd.DataFrame()
 
 
 @st.cache_data(ttl=300, show_spinner="Fetching categories...")
@@ -247,7 +333,9 @@ def fetch_freshness(_engine: Engine) -> Optional[str]:
 def render_refresh_timestamp() -> None:
     now = datetime.now(timezone.utc)
     st.session_state.last_refresh = now
-    st.caption(f":material/schedule: Last refreshed: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    st.caption(
+        f":material/schedule: Last refreshed: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC"
+    )
 
 
 def render_kpi_cards(
@@ -261,21 +349,41 @@ def render_kpi_cards(
 ) -> None:
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(label="Total Orders", value=f"{total_orders:,}", help="Completed orders")
+        st.metric(
+            label="Total Orders", value=f"{total_orders:,}", help="Completed orders"
+        )
     with col2:
-        st.metric(label="Total Net Revenue", value=f"${total_revenue:,.2f}", help="Revenue from completed orders")
+        st.metric(
+            label="Total Net Revenue",
+            value=f"${total_revenue:,.2f}",
+            help="Revenue from completed orders",
+        )
     with col3:
-        st.metric(label="Active Customers", value=f"{active_customers:,}", help="Distinct customers who ordered")
+        st.metric(
+            label="Active Customers",
+            value=f"{active_customers:,}",
+            help="Distinct customers who ordered",
+        )
 
     col4, col5, col6 = st.columns(3)
     with col4:
-        st.metric(label="Avg Order Value", value=f"${avg_order_value:,.2f}", help="Revenue per completed order")
+        st.metric(
+            label="Avg Order Value",
+            value=f"${avg_order_value:,.2f}",
+            help="Revenue per completed order",
+        )
     with col5:
         returned = non_completed if all_orders > 0 else 0
-        st.metric(label="Returned / Pending", value=f"{returned:,}", help="Non-completed orders")
+        st.metric(
+            label="Returned / Pending",
+            value=f"{returned:,}",
+            help="Non-completed orders",
+        )
     with col6:
         pct = return_rate
-        st.metric(label="Return Rate", value=f"{pct:.1f}%", help="% of orders not completed")
+        st.metric(
+            label="Return Rate", value=f"{pct:.1f}%", help="% of orders not completed"
+        )
 
 
 def render_monthly_chart(df: pd.DataFrame) -> None:
@@ -311,7 +419,10 @@ def render_category_chart(df: pd.DataFrame) -> None:
         title="Category Performance",
         barmode="group",
         labels={"value": "Amount", "category": "", "variable": "Metric"},
-        color_discrete_map={"total_net_revenue": "#00c853", "total_units_sold": "#ff6d00"},
+        color_discrete_map={
+            "total_net_revenue": "#00c853",
+            "total_units_sold": "#ff6d00",
+        },
         height=350,
     )
     fig.update_layout(
@@ -362,20 +473,46 @@ def render_sidebar() -> Dict[str, Any]:
 
         refresh_col, auto_col = st.columns([1, 2])
         with refresh_col:
-            if st.button(":arrows_counterclockwise: Refresh", type="primary", use_container_width=True):
+            if st.button(
+                ":arrows_counterclockwise: Refresh",
+                type="primary",
+                use_container_width=True,
+            ):
                 st.cache_data.clear()
                 st.cache_resource.clear()
                 st.rerun()
         with auto_col:
-            auto = st.checkbox("Auto-refresh", value=st.session_state.get("auto_refresh", False), key="auto_refresh")
+            auto = st.checkbox(
+                "Auto-refresh",
+                value=st.session_state.get("auto_refresh", False),
+                key="auto_refresh",
+            )
             if auto:
                 st.selectbox(
                     "Interval",
                     options=[30, 60, 120, 300],
-                    format_func=lambda s: f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s",
+                    format_func=lambda s: (
+                        f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s"
+                    ),
                     index=1,
                     key="refresh_interval",
                 )
+
+        st.divider()
+        st.markdown("**Simulated RLS — User Role**")
+        role = st.selectbox(
+            "Role",
+            options=RLS_ROLES,
+            index=0,
+            key="user_role",
+            help="Select a role to simulate row-level security. "
+            "Regional analysts only see data for their assigned country.",
+        )
+        country_label = _get_rls_country(role)
+        if country_label:
+            st.caption(f":material/lock: Scoped to **{country_label}**")
+        else:
+            st.caption(":material/public: Global access — no filter applied")
 
         st.divider()
         st.markdown("**Filters**")
@@ -392,9 +529,7 @@ def render_sidebar() -> Dict[str, Any]:
         st.markdown("**Export**")
         if st.button(":material/download: Export to Excel", use_container_width=True):
             _run_export()
-        st.markdown(
-            ":material/info: Exports styled analytics workbook to `outputs/`"
-        )
+        st.markdown(":material/info: Exports styled analytics workbook to `outputs/`")
 
         st.divider()
         freshness = st.session_state.get("freshness", None)
@@ -402,7 +537,9 @@ def render_sidebar() -> Dict[str, Any]:
             st.caption(f":material/calendar_month: Data up to: **{freshness}**")
 
         now = st.session_state.get("last_refresh", datetime.now(timezone.utc))
-        st.caption(f":material/schedule: Dashboard refreshed: {now.strftime('%H:%M:%S')} UTC")
+        st.caption(
+            f":material/schedule: Dashboard refreshed: {now.strftime('%H:%M:%S')} UTC"
+        )
 
         st.divider()
         with st.expander(":material/description: About"):
@@ -413,10 +550,11 @@ def render_sidebar() -> Dict[str, Any]:
                 "- PostgreSQL warehouse\n"
                 "- dbt transformations\n"
                 "- Streamlit dashboard\n"
+                "- Simulated RLS (role-based)\n"
                 "- Excel export"
             )
 
-    return {"categories": selected_categories}
+    return {"categories": selected_categories, "role": role}
 
 
 def _run_export() -> None:
@@ -424,12 +562,16 @@ def _run_export() -> None:
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "src.exports.excel_exporter"],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
                     if "saved" in line.lower() or "complete" in line.lower():
-                        st.success(f":material/check_circle: Export complete — {line.strip()}")
+                        st.success(
+                            f":material/check_circle: Export complete — {line.strip()}"
+                        )
                         return
                 st.success(":material/check_circle: Export completed successfully.")
             else:
@@ -441,22 +583,28 @@ def _run_export() -> None:
 
 
 def main() -> None:
-    render_sidebar()
+    sidebar = render_sidebar()
+    role = sidebar.get("role", "Global Admin")
 
-    total_orders, total_revenue, active_customers = fetch_kpis(get_engine())
-    avg_order_value, non_completed, all_orders = fetch_extra_kpis(get_engine())
+    total_orders, total_revenue, active_customers = fetch_kpis(get_engine(), role)
+    avg_order_value, non_completed, all_orders = fetch_extra_kpis(get_engine(), role)
     return_rate = (non_completed / all_orders * 100) if all_orders > 0 else 0.0
 
     render_kpi_cards(
-        total_orders, total_revenue, active_customers,
-        avg_order_value, return_rate, all_orders, non_completed,
+        total_orders,
+        total_revenue,
+        active_customers,
+        avg_order_value,
+        return_rate,
+        all_orders,
+        non_completed,
     )
 
     st.divider()
 
     col_left, col_right = st.columns(2)
     with col_left:
-        monthly_df = fetch_monthly_sales(get_engine())
+        monthly_df = fetch_monthly_sales(get_engine(), role)
         render_monthly_chart(monthly_df)
     with col_right:
         category_df = fetch_category_perf(get_engine())
@@ -464,10 +612,10 @@ def main() -> None:
 
     col_geo, col_table = st.columns(2)
     with col_geo:
-        geo_df = fetch_customer_geo(get_engine())
+        geo_df = fetch_customer_geo(get_engine(), role)
         render_geo_chart(geo_df)
     with col_table:
-        top_customers_df = fetch_top_customers(get_engine())
+        top_customers_df = fetch_top_customers(get_engine(), role)
         st.subheader("Top Customers by Revenue")
         render_top_customers(top_customers_df)
 
