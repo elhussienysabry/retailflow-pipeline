@@ -187,7 +187,13 @@ _PHASE_MAP: Dict[str, str] = {
     "dbt Docs Generate": "Consumption",
     "Lineage Graph Export": "Consumption",
     "Data Profile Report": "Consumption",
+    "ML Demand Forecast": "Consumption",
 }
+
+# Steps where a failure is non-fatal — the pipeline emits a warning but
+# does NOT halt.  This is intentional for experimental / ML layers where
+# model convergence may occasionally fail without affecting core data delivery.
+_SOFT_FAIL_STEPS: set = {"ML Demand Forecast"}
 # Default SLA threshold: if total runtime exceeds this (seconds), the
 # success alert is elevated to an amber SLA warning.
 _DEFAULT_SLA_SECONDS = 60.0
@@ -239,6 +245,7 @@ def _step_box(num: int, total: int, name: str) -> str:
         "[DOCS]",
         "[LINEAGE]",
         "[PROFILE]",
+        "[FORECAST]",
     ]
     icon = icons[num - 1] if num <= len(icons) else "[...]"
     return STEP_HEADER.format(sep=sep, emoji=icon, num=num, total=total, name=name)
@@ -655,10 +662,25 @@ def step_generate_lineage() -> int:
 
 
 def step_generate_profiling() -> int:
-    """Step 8: Generate HTML data profile report from mart tables."""
+    """Step 9: Generate HTML data profile report from mart tables."""
     result = _run_command(
         [_py_exe(), str(PROJECT_ROOT / "scripts" / "generate_profiling.py")],
         label="generate-profiling",
+    )
+    return result.returncode
+
+
+def step_generate_forecast() -> int:
+    """Step 10: Train ARIMA models per category & write 30-day forecasts.
+
+    This step is **soft-fail**: if the ML model fails to converge or
+    the forecast table is unreachable, the pipeline emits a warning
+    but continues — core data delivery must not be blocked by an
+    experimental ML layer.
+    """
+    result = _run_command(
+        [_py_exe(), str(PROJECT_ROOT / "scripts" / "generate_forecast.py")],
+        label="generate-forecast",
     )
     return result.returncode
 
@@ -673,6 +695,7 @@ PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("dbt Docs Generate", step_dbt_docs_generate),
     ("Lineage Graph Export", step_generate_lineage),
     ("Data Profile Report", step_generate_profiling),
+    ("ML Demand Forecast", step_generate_forecast),
 ]
 
 
@@ -850,6 +873,12 @@ def main() -> None:
                         _last_schema_drift_critical,
                         _last_schema_drift_warning,
                     )
+            elif step_name in _SOFT_FAIL_STEPS:
+                logger.warning(
+                    "Soft-fail step '%s' exited with code %d — continuing pipeline.",
+                    step_name,
+                    rc,
+                )
             else:
                 logger.critical(STEP_FAIL.format(name=step_name, code=rc))
                 pipeline_status = "SCHEMA_DRIFT" if rc == 2 else "FAILED"

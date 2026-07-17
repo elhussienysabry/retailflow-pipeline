@@ -141,6 +141,32 @@ QUERY_FRESHNESS = """
     SELECT MAX(order_date) AS last_order_date FROM marts.fct_orders
 """
 
+# ── ML Demand Forecasting Queries ──────────────────────────────────────────
+
+QUERY_FORECAST_HISTORY = """
+    SELECT
+        f.order_date,
+        p.category AS product_category,
+        SUM(f.net_revenue_dollars) AS daily_net_revenue
+    FROM marts.fct_orders AS f
+    INNER JOIN marts.dim_products AS p
+        ON f.product_id = p.product_id
+    WHERE f.status = 'completed'
+      AND f.order_date >= CURRENT_DATE - INTERVAL '90 days'
+    GROUP BY f.order_date, p.category
+    ORDER BY f.order_date, p.category
+"""
+
+QUERY_FORECAST_DATA = """
+    SELECT
+        forecast_date,
+        product_category,
+        forecasted_net_revenue,
+        model_generated_at
+    FROM marts.fct_demand_forecast
+    ORDER BY product_category, forecast_date
+"""
+
 
 def _get_env(key: str, fallback: str) -> str:
     return os.getenv(key) or os.getenv(fallback) or ""
@@ -465,6 +491,150 @@ def render_top_customers(df: pd.DataFrame) -> None:
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
+# ── ML Demand Forecasting ──────────────────────────────────────────────────
+
+
+@st.cache_data(ttl=300, show_spinner="Fetching forecast history...")
+def fetch_forecast_history(_engine: Engine) -> pd.DataFrame:
+    r = _safe_query(_engine, QUERY_FORECAST_HISTORY, "Forecast History")
+    if r is not None and not r.empty:
+        r["order_date"] = pd.to_datetime(r["order_date"])
+    return r if r is not None else pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner="Fetching forecast data...")
+def fetch_forecast_data(_engine: Engine) -> pd.DataFrame:
+    r = _safe_query(_engine, QUERY_FORECAST_DATA, "Forecast Data")
+    if r is not None and not r.empty:
+        r["forecast_date"] = pd.to_datetime(r["forecast_date"])
+    return r if r is not None else pd.DataFrame()
+
+
+def render_forecast_tab(engine: Engine) -> None:
+    st.markdown("### 🔮 AI Predictive Forecasting")
+    st.markdown(
+        "30-day demand forecast per product category, trained on daily "
+        "historical revenue using an ARIMA(1,1,1) model."
+    )
+
+    history = fetch_forecast_history(engine)
+    forecast = fetch_forecast_data(engine)
+
+    if history.empty and forecast.empty:
+        st.info(
+            "No forecast data available. Run the pipeline with the "
+            "ML Forecast step enabled to generate predictions."
+        )
+        return
+
+    categories = sorted(
+        set(history["product_category"].unique())
+        | set(forecast["product_category"].unique())
+    )
+
+    selected_category = st.selectbox(
+        "Select product category",
+        options=categories,
+        index=0,
+        key="forecast_category",
+    )
+
+    fig_data = []
+
+    if not history.empty:
+        cat_hist = history[history["product_category"] == selected_category].copy()
+        if not cat_hist.empty:
+            cat_hist = cat_hist.rename(
+                columns={
+                    "order_date": "date",
+                    "daily_net_revenue": "revenue",
+                }
+            )
+            cat_hist["type"] = "Historical"
+            fig_data.append(cat_hist)
+
+    if not forecast.empty:
+        cat_fc = forecast[forecast["product_category"] == selected_category].copy()
+        if not cat_fc.empty:
+            cat_fc = cat_fc.rename(
+                columns={
+                    "forecast_date": "date",
+                    "forecasted_net_revenue": "revenue",
+                }
+            )
+            cat_fc["type"] = "Forecast"
+            fig_data.append(cat_fc)
+
+    if not fig_data:
+        st.info(f"No data available for category '{selected_category}'.")
+        return
+
+    combined = pd.concat(fig_data, ignore_index=True).sort_values("date")
+
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+
+    hist_part = combined[combined["type"] == "Historical"]
+    fc_part = combined[combined["type"] == "Forecast"]
+
+    if not hist_part.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=hist_part["date"],
+                y=hist_part["revenue"],
+                mode="lines",
+                name="Historical (actual)",
+                line=dict(color="#2979ff", width=2),
+            )
+        )
+
+    if not fc_part.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=fc_part["date"],
+                y=fc_part["revenue"],
+                mode="lines",
+                name="Forecast (predicted)",
+                line=dict(color="#ff6d00", width=2, dash="dash"),
+            )
+        )
+
+    fig.update_layout(
+        title=f"{selected_category} — Daily Revenue & 30-Day Forecast",
+        xaxis_title="",
+        yaxis_title="Net Revenue ($)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+        height=450,
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+    fig.update_yaxes(tickprefix="$")
+    st.plotly_chart(fig, use_container_width=True)
+
+    if not forecast.empty:
+        cat_fc_table = forecast[
+            forecast["product_category"] == selected_category
+        ].copy()
+        if not cat_fc_table.empty:
+            with st.expander(":material/table: View raw forecast table"):
+                display = cat_fc_table.rename(
+                    columns={
+                        "forecast_date": "Date",
+                        "product_category": "Category",
+                        "forecasted_net_revenue": "Forecasted Revenue ($)",
+                        "model_generated_at": "Model Generated At",
+                    }
+                )
+                display["Forecasted Revenue ($)"] = display[
+                    "Forecasted Revenue ($)"
+                ].apply(lambda x: f"${x:,.2f}")
+                st.dataframe(display, use_container_width=True, hide_index=True)
+
+            latest_gen = cat_fc_table["model_generated_at"].iloc[0]
+            st.caption(f":material/schedule: Model generated: {latest_gen}")
+
+
 def render_sidebar() -> Dict[str, Any]:
     with st.sidebar:
         st.markdown(f"### {PAGE_TITLE}")
@@ -551,7 +721,8 @@ def render_sidebar() -> Dict[str, Any]:
                 "- dbt transformations\n"
                 "- Streamlit dashboard\n"
                 "- Simulated RLS (role-based)\n"
-                "- Excel export"
+                "- Excel export\n"
+                "- ML Demand Forecast (ARIMA)"
             )
 
     return {"categories": selected_categories, "role": role}
@@ -586,43 +757,53 @@ def main() -> None:
     sidebar = render_sidebar()
     role = sidebar.get("role", "Global Admin")
 
-    total_orders, total_revenue, active_customers = fetch_kpis(get_engine(), role)
-    avg_order_value, non_completed, all_orders = fetch_extra_kpis(get_engine(), role)
-    return_rate = (non_completed / all_orders * 100) if all_orders > 0 else 0.0
-
-    render_kpi_cards(
-        total_orders,
-        total_revenue,
-        active_customers,
-        avg_order_value,
-        return_rate,
-        all_orders,
-        non_completed,
+    tab_analytics, tab_forecast = st.tabs(
+        ["📊 Analytics", "🔮 AI Predictive Forecasting"]
     )
 
-    st.divider()
+    with tab_analytics:
+        total_orders, total_revenue, active_customers = fetch_kpis(get_engine(), role)
+        avg_order_value, non_completed, all_orders = fetch_extra_kpis(
+            get_engine(), role
+        )
+        return_rate = (non_completed / all_orders * 100) if all_orders > 0 else 0.0
 
-    col_left, col_right = st.columns(2)
-    with col_left:
-        monthly_df = fetch_monthly_sales(get_engine(), role)
-        render_monthly_chart(monthly_df)
-    with col_right:
-        category_df = fetch_category_perf(get_engine())
-        render_category_chart(category_df)
+        render_kpi_cards(
+            total_orders,
+            total_revenue,
+            active_customers,
+            avg_order_value,
+            return_rate,
+            all_orders,
+            non_completed,
+        )
 
-    col_geo, col_table = st.columns(2)
-    with col_geo:
-        geo_df = fetch_customer_geo(get_engine(), role)
-        render_geo_chart(geo_df)
-    with col_table:
-        top_customers_df = fetch_top_customers(get_engine(), role)
-        st.subheader("Top Customers by Revenue")
-        render_top_customers(top_customers_df)
+        st.divider()
 
-    freshness = fetch_freshness(get_engine())
-    st.session_state.freshness = freshness
+        col_left, col_right = st.columns(2)
+        with col_left:
+            monthly_df = fetch_monthly_sales(get_engine(), role)
+            render_monthly_chart(monthly_df)
+        with col_right:
+            category_df = fetch_category_perf(get_engine())
+            render_category_chart(category_df)
 
-    render_refresh_timestamp()
+        col_geo, col_table = st.columns(2)
+        with col_geo:
+            geo_df = fetch_customer_geo(get_engine(), role)
+            render_geo_chart(geo_df)
+        with col_table:
+            top_customers_df = fetch_top_customers(get_engine(), role)
+            st.subheader("Top Customers by Revenue")
+            render_top_customers(top_customers_df)
+
+        freshness = fetch_freshness(get_engine())
+        st.session_state.freshness = freshness
+
+        render_refresh_timestamp()
+
+    with tab_forecast:
+        render_forecast_tab(get_engine())
 
     if st.session_state.get("auto_refresh", False):
         interval = st.session_state.get("refresh_interval", 60)
