@@ -6,9 +6,15 @@ customer_metrics AS (
     SELECT
         c.dbt_scd_id AS customer_key,
         c.customer_id,
-        c.first_name,
-        c.last_name,
-        c.email,
+        {% if var('mask_pii', false) %}
+            {{ mask_string('c.first_name') }} AS first_name,
+            {{ mask_string('c.last_name') }} AS last_name,
+            {{ mask_email('c.email') }} AS email,
+        {% else %}
+            c.first_name,
+            c.last_name,
+            c.email,
+        {% endif %}
         c.country,
         c.city,
         c.signup_date,

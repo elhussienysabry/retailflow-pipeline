@@ -19,6 +19,6 @@ from scripts.generate_fake_data import (  # noqa: F401
 __all__ = [
     "SCALE_PROFILES",
     "generate_customers",
-    "generate_orders",  
+    "generate_orders",
     "generate_products",
 ]
