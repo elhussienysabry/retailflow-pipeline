@@ -188,12 +188,13 @@ _PHASE_MAP: Dict[str, str] = {
     "Lineage Graph Export": "Consumption",
     "Data Profile Report": "Consumption",
     "ML Demand Forecast": "Consumption",
+    "CDC Stream Ingest": "Ingestion",
 }
 
 # Steps where a failure is non-fatal — the pipeline emits a warning but
 # does NOT halt.  This is intentional for experimental / ML layers where
 # model convergence may occasionally fail without affecting core data delivery.
-_SOFT_FAIL_STEPS: set = {"ML Demand Forecast"}
+_SOFT_FAIL_STEPS: set = {"ML Demand Forecast", "CDC Stream Ingest"}
 # Default SLA threshold: if total runtime exceeds this (seconds), the
 # success alert is elevated to an amber SLA warning.
 _DEFAULT_SLA_SECONDS = 60.0
@@ -246,6 +247,7 @@ def _step_box(num: int, total: int, name: str) -> str:
         "[LINEAGE]",
         "[PROFILE]",
         "[FORECAST]",
+        "[CDC]",
     ]
     icon = icons[num - 1] if num <= len(icons) else "[...]"
     return STEP_HEADER.format(sep=sep, emoji=icon, num=num, total=total, name=name)
@@ -685,6 +687,20 @@ def step_generate_forecast() -> int:
     return result.returncode
 
 
+def step_stream_ingest() -> int:
+    """Step 11: CDC micro-batch ingest into ods.live_transactions.
+
+    This step is **soft-fail**: if the ODS table is unreachable the
+    pipeline emits a warning but continues — core data delivery must
+    not be blocked by the operational store layer.
+    """
+    result = _run_command(
+        [_py_exe(), str(PROJECT_ROOT / "scripts" / "stream_ingest.py")],
+        label="stream-ingest",
+    )
+    return result.returncode
+
+
 PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("Generate Data", step_generate_data),
     ("Load to PostgreSQL", step_load_to_postgres),
@@ -696,6 +712,7 @@ PIPELINE_STEPS: List[Tuple[str, callable]] = [
     ("Lineage Graph Export", step_generate_lineage),
     ("Data Profile Report", step_generate_profiling),
     ("ML Demand Forecast", step_generate_forecast),
+    ("CDC Stream Ingest", step_stream_ingest),
 ]
 
 
