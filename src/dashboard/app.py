@@ -635,6 +635,134 @@ def render_forecast_tab(engine: Engine) -> None:
             st.caption(f":material/schedule: Model generated: {latest_gen}")
 
 
+# ── ODS Live Monitoring ────────────────────────────────────────────────────
+
+QUERY_ODS_LIVE = """
+    SELECT
+        source_system,
+        DATE_TRUNC('minute', upsert_at) AS minute_bucket,
+        COUNT(*) AS txn_count
+    FROM ods.live_transactions
+    WHERE upsert_at >= NOW() - INTERVAL '1 hour'
+    GROUP BY source_system, DATE_TRUNC('minute', upsert_at)
+    ORDER BY minute_bucket
+"""
+
+QUERY_ODS_SUMMARY = """
+    SELECT
+        source_system,
+        COUNT(*) AS total_records,
+        MAX(upsert_at) AS last_upsert
+    FROM ods.live_transactions
+    GROUP BY source_system
+    ORDER BY source_system
+"""
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def fetch_ods_live(_engine: Engine) -> pd.DataFrame:
+    r = _safe_query(_engine, QUERY_ODS_LIVE, "ODS Live")
+    if r is not None and not r.empty:
+        r["minute_bucket"] = pd.to_datetime(r["minute_bucket"])
+    return r if r is not None else pd.DataFrame()
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def fetch_ods_summary(_engine: Engine) -> pd.DataFrame:
+    r = _safe_query(_engine, QUERY_ODS_SUMMARY, "ODS Summary")
+    return r if r is not None else pd.DataFrame()
+
+
+def render_ods_tab(engine: Engine) -> None:
+    st.markdown("### :zap: ODS Live Transactions")
+    st.markdown(
+        "Near real-time transactional activity from the Operational Data Store "
+        "(`ods.live_transactions`). Auto-refreshes every **10 seconds**."
+    )
+
+    col1, col2 = st.columns([3, 1])
+
+    with col2:
+        summary = fetch_ods_summary(engine)
+        if not summary.empty:
+            st.markdown("**Per-system totals**")
+            for _, row in summary.iterrows():
+                st.metric(
+                    label=row["source_system"],
+                    value=f"{row['total_records']:,}",
+                    help=f"Last upsert: {row['last_upsert']}",
+                )
+
+    with col1:
+        live = fetch_ods_live(engine)
+        if live.empty:
+            st.info(
+                "No ODS data available. Run the pipeline with CDC Stream "
+                "Ingest enabled to populate ods.live_transactions."
+            )
+        else:
+            import plotly.graph_objects as go
+
+            systems = live["source_system"].unique()
+            colors = {
+                "customers": "#2979ff",
+                "orders": "#00c853",
+                "products": "#ff6d00",
+                "pos": "#d500f9",
+            }
+            fig = go.Figure()
+            for sys_name in systems:
+                subset = live[live["source_system"] == sys_name].sort_values(
+                    "minute_bucket"
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=subset["minute_bucket"],
+                        y=subset["txn_count"],
+                        mode="lines+markers",
+                        name=sys_name,
+                        line=dict(color=colors.get(sys_name, "#888"), width=2),
+                    )
+                )
+            fig.update_layout(
+                title="Hourly Transaction Activity (per minute)",
+                xaxis_title="",
+                yaxis_title="Transactions",
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1,
+                ),
+                hovermode="x unified",
+                height=400,
+                margin=dict(l=10, r=10, t=40, b=10),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            latest = live["minute_bucket"].max()
+            st.caption(f":material/schedule: Last activity: {latest}")
+
+    st.divider()
+    with st.expander(":material/database: Raw ODS records (last 50)"):
+        raw_query = """
+            SELECT record_id, source_system, source_key,
+                   upsert_at, batch_id
+            FROM ods.live_transactions
+            ORDER BY upsert_at DESC
+            LIMIT 50
+        """
+        raw_df = _safe_query(engine, raw_query, "ODS Raw")
+        if raw_df is not None and not raw_df.empty:
+            st.dataframe(raw_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No records yet.")
+
+    # Auto-refresh every 10 seconds for this tab.
+    st.rerun(ttl=10000)
+
+
 def render_sidebar() -> Dict[str, Any]:
     with st.sidebar:
         st.markdown(f"### {PAGE_TITLE}")
@@ -722,7 +850,8 @@ def render_sidebar() -> Dict[str, Any]:
                 "- Streamlit dashboard\n"
                 "- Simulated RLS (role-based)\n"
                 "- Excel export\n"
-                "- ML Demand Forecast (ARIMA)"
+                "- ML Demand Forecast (ARIMA)\n"
+                "- CDC Stream Ingest (ODS)"
             )
 
     return {"categories": selected_categories, "role": role}
@@ -757,8 +886,8 @@ def main() -> None:
     sidebar = render_sidebar()
     role = sidebar.get("role", "Global Admin")
 
-    tab_analytics, tab_forecast = st.tabs(
-        ["📊 Analytics", "🔮 AI Predictive Forecasting"]
+    tab_analytics, tab_forecast, tab_ods = st.tabs(
+        ["📊 Analytics", "🔮 AI Predictive Forecasting", "⚡ Live ODS"]
     )
 
     with tab_analytics:
@@ -804,6 +933,9 @@ def main() -> None:
 
     with tab_forecast:
         render_forecast_tab(get_engine())
+
+    with tab_ods:
+        render_ods_tab(get_engine())
 
     if st.session_state.get("auto_refresh", False):
         interval = st.session_state.get("refresh_interval", 60)
