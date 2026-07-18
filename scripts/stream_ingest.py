@@ -29,8 +29,7 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Tuple
 
 import pandas as pd
 from sqlalchemy import create_engine, text
